@@ -92,6 +92,16 @@ carrier_member_synced() {
 		printf '%s\n' "$details" | grep -q 'ad_partner_oper_port_state 63'
 }
 
+nhg_member_count_is() {
+	local sock="$1"
+	local nhg_id="$2"
+	local expected="$3"
+
+	grcli -s "$sock" -j nexthop show id "$nhg_id" 2>/dev/null |
+		jq -e --argjson expected "$expected" \
+		'.type == "group" and (.members | length) == $expected' >/dev/null
+}
+
 configure_mh_carrier() {
 	local system_mac=02:00:00:00:10:00
 	local esi=03:02:00:00:00:10:00:00:00:01
@@ -168,7 +178,63 @@ configure_mh_carrier() {
 		return 2
 	fi
 
-	echo "PASS: EVPN-MH carrier traffic reached the remote host"
+	local l2_nhs remote_fdb nhg_id
+	l2_nhs=$(grcli -s "$tmp/grout3.sock" -j nexthop show type l2)
+	printf '%s\n' "$l2_nhs" | jq -e '
+		length == 2 and
+		any(.[]; .vtep == "172.16.0.1") and
+		any(.[]; .vtep == "172.16.0.2")
+	' >/dev/null || fail "remote PE did not install both L2 VTEP nexthops"
+
+	remote_fdb=$(grcli -s "$tmp/grout3.sock" -j fdb show)
+	nhg_id=$(printf '%s\n' "$remote_fdb" | jq -r '
+		[.[] | select(.iface == "vxlan100" and .nhg != 0)][0].nhg // 0
+	')
+	[ "$nhg_id" -ne 0 ] || fail "remote all-active MAC was not installed against an NHG"
+	grcli -s "$tmp/grout3.sock" -j nexthop show id "$nhg_id" |
+		jq -e '.type == "group" and (.members | length) == 2' >/dev/null ||
+		fail "remote MAC NHG does not contain both PE nexthops"
+
+	local capture_pid capture_file
+	capture_file="$tmp/evpn-mh-ecmp.capture"
+	ip netns exec "$fabric" timeout 3 tcpdump -l -nn -i any \
+		'src host 172.16.0.3 and udp dst port 4789' >"$capture_file" 2>/dev/null &
+	capture_pid=$!
+	sleep 0.2
+	ip netns exec "${hosts[2]}" python3 - <<-'PY'
+	import socket
+
+	for port in range(20000, 20064):
+	    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	    sock.bind(("10.0.0.4", port))
+	    sock.sendto(b"evpn-mh", ("10.0.0.10", 9000))
+	    sock.close()
+	PY
+	wait "$capture_pid" || true
+	grep -q '172\.16\.0\.3\.[0-9]* > 172\.16\.0\.1\.4789' "$capture_file" ||
+		fail "MAC ECMP did not select PE1"
+	grep -q '172\.16\.0\.3\.[0-9]* > 172\.16\.0\.2\.4789' "$capture_file" ||
+		fail "MAC ECMP did not select PE2"
+
+	vtysh -N "${nodes[0]}" <<-EOF
+	configure terminal
+	router bgp 65000
+	 neighbor 172.16.0.3 shutdown
+	EOF
+	wait_until "remote MAC NHG to contract after PE1 withdrawal" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 1
+	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after PE1 withdrawal"
+
+	vtysh -N "${nodes[0]}" <<-EOF
+	configure terminal
+	router bgp 65000
+	 no neighbor 172.16.0.3 shutdown
+	EOF
+	wait_until "remote MAC NHG to restore PE1" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+
+	echo "PASS: EVPN-MH carrier traffic used both PEs and survived one withdrawal"
 }
 trap cleanup EXIT
 

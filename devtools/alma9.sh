@@ -34,7 +34,7 @@ build)
 	;;
 test)
 	shift
-	set -- sh -lc 'make -j"$JOBS" unit-tests && make -j"$JOBS" smoke-tests' "$@"
+	set -- sh -lc 'make -j"$JOBS" unit-tests && make -j1 smoke-tests' "$@"
 	;;
 shell)
 	shift

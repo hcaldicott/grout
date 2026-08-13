@@ -22,6 +22,7 @@ prefix="emh-$$"
 carrier="$prefix-carrier"
 nodes=("$prefix-n1" "$prefix-n2")
 grout_pids=()
+stress_cycles="${EVPN_MH_STRESS_CYCLES:-3}"
 
 wait_until() {
 	local description="$1"
@@ -254,4 +255,33 @@ if [ "$recovered_bond_output" -lt 1 ] || [ "$recovered_egress_drops" -ne 0 ]; th
 	exit 1
 fi
 
-echo "PASS: protodown suppresses ordinary traffic, keeps LACP alive, and recovers"
+# Repeat the state transition to catch stale actor/partner state, timer leaks
+# and members that recover once but fail on a later negotiation cycle.
+for cycle in $(seq 1 "$stress_cycles"); do
+	grcli -s "$tmp/grout1.sock" interface set bond carrier member carrier-port protodown on
+	wait_until "stress cycle $cycle Grout member protodown" \
+		grout_member_state "$tmp/grout1.sock" true false
+	wait_until "stress cycle $cycle carrier withdrawal" member_not_synced x-carrier1
+	member_synced x-carrier2 || {
+		echo "FAIL: stress cycle $cycle disturbed the surviving LACP member" >&2
+		exit 1
+	}
+	if ! timeout 5 ip netns exec "$carrier" tcpdump -Q in -c 1 -nn -i x-carrier1 \
+		'ether proto 0x8809' >/dev/null 2>&1; then
+		echo "FAIL: stress cycle $cycle silenced LACP while protodown" >&2
+		exit 1
+	fi
+
+	grcli -s "$tmp/grout1.sock" interface set bond carrier member carrier-port protodown off
+	wait_until "stress cycle $cycle protodown clear" \
+		grout_member_state "$tmp/grout1.sock" false false
+	wait_until "stress cycle $cycle carrier reselection" member_synced x-carrier1
+	wait_until "stress cycle $cycle Grout member reactivation" \
+		grout_member_state "$tmp/grout1.sock" false true
+done
+
+stress_mac=$(printf '02:00:00:00:cc:%02x' "$stress_cycles")
+send_frame x-carrier1 "$stress_mac" 0x88c0
+wait_until "ordinary ingress after repeated protodown cycles" fdb_has_mac "$stress_mac"
+
+echo "PASS: protodown suppresses ordinary traffic, keeps LACP alive, and recovers repeatedly"

@@ -19,6 +19,8 @@
 static _Atomic(struct gr_bridge_port_policy *) policies[GR_MAX_IFACES];
 static struct gr_bridge_port_policy *desired_policies[GR_MAX_IFACES];
 
+static void bridge_port_policy_clear(uint16_t iface_id);
+
 const struct gr_bridge_port_policy *bridge_port_policy_get(uint16_t iface_id) {
 	if (iface_id >= GR_MAX_IFACES)
 		return NULL;
@@ -43,6 +45,11 @@ static int bridge_port_policy_validate(const struct gr_bridge_port_policy *polic
 	}
 
 	return 0;
+}
+
+static bool bridge_port_policy_empty(const struct gr_bridge_port_policy *policy) {
+	return policy->flags == 0 && policy->backup_nhg_id == 0
+		&& policy->n_sph_filters == 0;
 }
 
 static bool bridge_port_iface_ready(uint16_t iface_id) {
@@ -93,6 +100,10 @@ static struct api_out bridge_port_set(const void *request, struct api_ctx *) {
 
 	if ((ret = bridge_port_policy_validate(&req->policy)) < 0)
 		return api_out(-ret, 0, NULL);
+	if (bridge_port_policy_empty(&req->policy)) {
+		bridge_port_policy_clear(req->policy.iface_id);
+		return api_out(0, 0, NULL);
+	}
 	if ((ret = bridge_port_policy_replace(&req->policy)) < 0)
 		return api_out(-ret, 0, NULL);
 
@@ -145,7 +156,13 @@ static void bridge_port_iface_reconcile(uint32_t, const void *obj) {
 int bridge_port_policy_test_set(const struct gr_bridge_port_policy *policy) {
 	int ret = bridge_port_policy_validate(policy);
 
-	return ret < 0 ? ret : bridge_port_policy_replace(policy);
+	if (ret < 0)
+		return ret;
+	if (bridge_port_policy_empty(policy)) {
+		bridge_port_policy_clear(policy->iface_id);
+		return 0;
+	}
+	return bridge_port_policy_replace(policy);
 }
 
 void bridge_port_policy_test_reconcile(uint16_t iface_id) {

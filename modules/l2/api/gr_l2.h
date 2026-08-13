@@ -204,7 +204,8 @@ typedef enum : uint8_t {
 } gr_bridge_port_flags_t;
 
 // Policy applied to overlay traffic forwarded toward a local bridge member.
-// The entire object is replaced atomically by GR_BRIDGE_PORT_SET.
+// The entire object is replaced atomically by GR_BRIDGE_PORT_SET. An update
+// with no flags, backup NHG or split-horizon filters deletes the policy.
 struct gr_bridge_port_policy {
 	uint16_t iface_id;
 	gr_bridge_port_flags_t flags;

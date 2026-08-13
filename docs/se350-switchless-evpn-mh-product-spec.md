@@ -1094,6 +1094,10 @@ Remaining requirements:
 - keep the translation private to the provider boundary;
 - document behavior if actual guest VLAN trunks are added.
 
+The provider rejects any FRR MAC operation whose VLAN is not
+`GROUT_BRIDGE_VLAN`; unsupported tagged service state therefore fails visibly
+instead of being silently collapsed into Grout VLAN 0.
+
 ### 13.3 FRR Layer-2 nexthop dataplane patch
 
 FRR 10.6.1's EVPN-MH code normally calls Linux netlink-specific functions
@@ -1107,6 +1111,11 @@ retaining:
 - FRR's typed Layer-2 nexthop IDs;
 - VTEP address and group-member data for non-kernel providers;
 - Linux provider behavior, including `NHA_FDB` encoding.
+
+Typed L2 completion contexts are handled explicitly. Successful completions do
+not enter the ordinary NHG hash because these IDs intentionally have no
+`nhg_hash_entry`; failed install and delete completions produce an actionable
+Zebra error rather than disappearing through the expected hash miss.
 
 The architectural principle is important: FRR should expose an implementation-
 neutral dataplane object. It should not call Grout-specific code from
@@ -1308,6 +1317,8 @@ live migration.
 | Type-4 route | Pass | ES route exchanged. |
 | Type-1 routes | Prototype pass | Per-ES and per-EVI routes received without Zebra crash. |
 | L2 NH/NHG provider handoff | Prototype pass | FRR typed L2 VTEPs and group installed in Grout. |
+| Datapath concurrency hardening | Pass | Nexthop-ID lookups use DPDK lock-free read/write concurrency with QSBR reclamation; NHG replacements publish one immutable state; mixed or forwarding-class-changing groups are rejected. |
+| Fragment path affinity | Pass | IPv4 DF packets retain L4 hashing while every fragment, including the MF-marked first fragment, uses the same L3 hash. |
 | Remote MAC ECMP | Prototype pass | 64 UDP flows use both remote PEs. |
 | Member withdrawal/recovery | Prototype pass | Remote NHG collapses to one member and restores. |
 | DF preference change | Prototype pass | BUM egress follows live DF change. |
@@ -1315,6 +1326,7 @@ live migration.
 | Local-bias redirect | Prototype pass | ES hairpin redirects through backup NHG. |
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
+| Bridge-port ordering | Unit pass | Desired policy is retained before bridge readiness, activated after interface add/reconfiguration, deactivated while detached and cleared on removal. Physical restart coverage remains required. |
 | Zebra phased restart | Harness gap | Retained state exists, but dependency restart/replay is not a gating test. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |

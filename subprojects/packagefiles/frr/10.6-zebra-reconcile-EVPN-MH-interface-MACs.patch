@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Harrison Caldicott <harrison@itsfubar.com.au>
+Date: Thu, 13 Aug 2026 22:35:00 +1000
+Subject: [PATCH] zebra: reconcile interface MACs when attaching an ES
+
+A MAC learned before EVPN multihoming configuration is complete remains
+linked to the access interface rather than the Ethernet Segment. The
+existing ES lifecycle flush only walks the ES MAC list, so the stale MAC
+continues to be advertised without an ESI and remote PEs cannot build the
+all-active MAC nexthop group.
+
+Also flush local MACs linked directly to the interface when attaching or
+detaching an ES. The dataplane can then relearn them with forwarding
+information matching the current ES state.
+
+Signed-off-by: Harrison Caldicott <harrison@itsfubar.com.au>
+---
+
+diff --git a/zebra/zebra_evpn_mh.c b/zebra/zebra_evpn_mh.c
+index f065094..7a68ef5 100644
+--- a/zebra/zebra_evpn_mh.c
++++ b/zebra/zebra_evpn_mh.c
+@@ -2170,6 +2170,7 @@ static void zebra_evpn_es_flush_local_macs(struct zebra_evpn_es *es,
+ 	struct zebra_mac *mac;
+ 	struct listnode	*node;
+ 	struct listnode *nnode;
++	struct zebra_if *zif = ifp->info;
+ 
+ 	for (ALL_LIST_ELEMENTS(es->mac_list, node, nnode, mac)) {
+ 		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+@@ -2184,6 +2185,24 @@ static void zebra_evpn_es_flush_local_macs(struct zebra_evpn_es *es,
+ 				   es->esi_str, add ? "add" : "del");
+ 		zebra_evpn_flush_local_mac(mac, ifp);
+ 	}
++
++	/* MACs learned before the ES was attached are still linked to the
++	 * access interface rather than the ES. Flush those entries as well so
++	 * the dataplane relearns them with the new ES forwarding information.
++	 */
++	if (!zif->mac_list)
++		return;
++
++	for (ALL_LIST_ELEMENTS(zif->mac_list, node, nnode, mac)) {
++		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
++			continue;
++
++		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
++			zlog_debug("VNI %u mac %pEA update; local ES %s %s on ifp %s",
++				   mac->zevpn->vni, &mac->macaddr, es->esi_str,
++				   add ? "add" : "del", ifp->name);
++		zebra_evpn_flush_local_mac(mac, ifp);
++	}
+ }
+ 
+ void zebra_evpn_es_local_br_port_update(struct zebra_if *zif)
+-- 
+2.51.0

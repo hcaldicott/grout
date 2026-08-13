@@ -22,7 +22,7 @@ dataplane development; it does not represent physical NIC performance.
 | Capability | Result | Evidence |
 | --- | --- | --- |
 | AlmaLinux 9.8 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build natively on arm64. |
-| Existing unit suite | Pass | All 10 Meson unit tests pass. |
+| Unit suite | Pass | All 11 Meson unit tests pass, including RSS/software flow-hash coverage. |
 | Three-node BGP EVPN | Pass | All peers establish and exchange EVPN routes. |
 | Three-node VXLAN bridge | Pass | Host traffic crosses node 1 to node 3 in both directions. |
 | Split-chassis carrier LACP | Pass | A Linux carrier bond selects both Grout links in one aggregator when both chassis advertise the same LACP system MAC. |
@@ -30,17 +30,18 @@ dataplane development; it does not represent physical NIC performance.
 | EVPN Type-4 route | Pass | The Ethernet Segment route is exchanged between PEs. |
 | ES-to-VNI association | Prototype | Synthetic bridge VLAN metadata gives FRR the VLAN/VNI relationship absent from Grout's VLAN-abstracted bridge model. |
 | EVPN Type-1 routes | Pass with FRR prototype | Both PEs advertise per-ES and per-EVI routes; the remote PE receives all four paths without a zebra crash. |
-| FRR L2 NH/NHG handoff | Prototype | A bundled FRR patch queues the L2 nexthops through the dataplane provider. Grout currently rejects them cleanly because its L2 NHG API is not implemented. |
-| MAC ECMP | Missing | Grout FDB entries contain one output interface and one VTEP, not an L2 nexthop group. |
+| FRR L2 NH/NHG handoff | Prototype pass | The provider installs FRR's typed L2 VTEPs and two-member MAC-ECMP group in Grout. |
+| MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
 | DF and split-horizon enforcement | Missing | The Grout provider does not implement `DPLANE_OP_BR_PORT_UPDATE`; the bridge datapath has no non-DF gate or ES peer-VTEP filter. |
 | Uplink tracking/protodown | Missing | The Grout provider does not implement the relevant `DPLANE_OP_INTF_UPDATE` state. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
-FRR 10.6.1 already calculates the EVPN-MH control-plane state. The main FRR
-gap is narrow but important: `zebra_evpn_mh.c` calls
+FRR 10.6.1 already calculates the EVPN-MH control-plane state. The bundled
+prototype closes a narrow but important FRR gap: `zebra_evpn_mh.c` normally calls
 `kernel_upd_mac_nh()`, `kernel_del_mac_nh()`, `kernel_upd_mac_nhg()` and
-`kernel_del_mac_nhg()` directly for L2 nexthops and groups. The same file
-already queues bridge-port updates through the dataplane abstraction.
+`kernel_del_mac_nhg()` directly for L2 nexthops and groups. The patch queues
+those objects through the dataplane abstraction while retaining Linux
+`NHA_FDB` encoding.
 
 ## Development phases
 
@@ -101,16 +102,25 @@ Acceptance criteria:
 
 ### 3. Add Grout L2 nexthop groups and MAC ECMP
 
-Status: missing.
+Status: prototype tested; focused lifecycle unit coverage and review required.
 
 Extend the Grout L2 API and control-plane model so an external FDB entry can
 refer either to one interface/VTEP or to an L2 nexthop group. Add group members
 that resolve to VXLAN VTEPs, manage their lifetime through RCU-safe updates and
 select a member using a stable packet-flow hash in the bridge datapath.
 
+The working implementation adds a dedicated L2-VTEP nexthop type, reuses the
+existing RCU-safe weighted group representation, adds an optional NHG ID to
+external FDB entries and resolves the current group by ID in the bridge
+datapath. Hardware RSS is used when present. TAP and other devices without RSS
+use the same software L3/L4 Toeplitz fallback as Grout bonds. Resolving by ID
+avoids a stale FDB pointer if FRR deletes and recreates a group during
+convergence.
+
 Acceptance criteria:
 
-- Unit tests cover group create, replace, member removal and deletion order.
+- Unit tests cover stable per-flow hashing, distinct UDP flows and hardware RSS
+  precedence; focused group deletion-order tests remain to be added.
 - A remote all-active MAC is installed against an L2 NHG, not one arbitrary
   VTEP.
 - Multiple flows use both remote PEs while packets from one flow remain
@@ -218,6 +228,7 @@ qualification.
    add/update/delete tests.
 2. Add FRR tests for the working L2 NH/NHG dataplane representation and prepare
    it for upstream review.
-3. Add a Grout provider test before implementing the Grout L2 NHG API.
-4. Extend the three-node probe one phase at a time: ES-EVI, Type-1, L2 NHG,
-   DF/split horizon, failure convergence, then VM migration.
+3. Add focused Grout L2 NH/NHG create, replace and deletion-order unit tests.
+4. Implement the bridge-port update API and DF/split-horizon enforcement.
+5. Extend failure convergence through carrier-link, underlay and daemon restart
+   cases before beginning the VM migration phase.

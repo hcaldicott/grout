@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026 Robin Jarry
 
+#include "flow_hash.h"
 #include "graph.h"
 #include "iface.h"
 #include "l2.h"
 #include "mbuf.h"
+#include "nexthop.h"
 #include "rxtx.h"
 
 #include <rte_ether.h>
@@ -17,6 +19,7 @@ enum edges {
 	BRIDGE_INVAL,
 	HAIRPIN,
 	OUT_IFACE_INVAL,
+	NHG_INVAL,
 	FLOOD_DISABLED,
 	EDGE_COUNT
 };
@@ -85,7 +88,25 @@ static uint16_t bridge_input_process(
 			}
 			// Direct output to learned interface
 			d->iface = iface;
-			d->vtep = fdb->vtep;
+			if (fdb->nhg_id != GR_NH_ID_UNSET) {
+				struct nexthop *nh = nexthop_lookup_id(fdb->nhg_id);
+
+				if (nh == NULL || nh->type != GR_NH_T_GROUP) {
+					edge = NHG_INVAL;
+					goto next;
+				}
+				nh = nexthop_group_get_nh(
+					nexthop_info_group(nh),
+					gr_mbuf_flow_hash(m, GR_MBUF_FLOW_HASH_RSS)
+				);
+				if (nh == NULL || nh->type != GR_NH_T_L2) {
+					edge = NHG_INVAL;
+					goto next;
+				}
+				d->vtep = nexthop_info_l2(nh)->vtep;
+			} else {
+				d->vtep = fdb->vtep;
+			}
 
 			if (iface->type == GR_IFACE_TYPE_BRIDGE) {
 				edge = INPUT;
@@ -137,6 +158,7 @@ static struct rte_node_register node = {
 		[BRIDGE_INVAL] = "bridge_input_invalid_domain",
 		[HAIRPIN] = "bridge_input_hairpin",
 		[OUT_IFACE_INVAL] = "bridge_input_invalid_output",
+		[NHG_INVAL] = "bridge_input_invalid_nhg",
 		[FLOOD_DISABLED] = "bridge_input_flood_disabled",
 	},
 };
@@ -153,4 +175,5 @@ GR_NODE_REGISTER(info);
 GR_DROP_REGISTER(bridge_input_invalid_domain);
 GR_DROP_REGISTER(bridge_input_hairpin);
 GR_DROP_REGISTER(bridge_input_invalid_output);
+GR_DROP_REGISTER(bridge_input_invalid_nhg);
 GR_DROP_REGISTER(bridge_input_flood_disabled);

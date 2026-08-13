@@ -134,6 +134,7 @@ void fdb_learn(
 		fdb->iface_id = iface_id;
 		fdb->vtep = *vtep;
 		fdb->last_seen = now;
+		fdb->nhg_id = 0;
 
 		if (rte_hash_add_key_data(fdb_hash, &key, fdb) < 0) {
 			// no space left in hash

@@ -106,6 +106,7 @@ struct gr_fdb_entry {
 	struct l3_addr vtep; // Remote VTEP for VXLAN-learned entries, 0 for local.
 	gr_fdb_flags_t flags;
 	gr_clock_ns_t last_seen; // Refreshed on each datapath hit for learned entries.
+	uint32_t nhg_id; // Optional L2 nexthop group used instead of vtep.
 };
 
 enum gr_l2_requests : uint32_t {

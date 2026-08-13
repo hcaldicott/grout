@@ -120,8 +120,9 @@ static cmd_status_t fdb_show(struct gr_api_client *c, const struct ec_pnode *p) 
 	gr_table_column(table, "VLAN", GR_DISP_RIGHT | GR_DISP_INT); // 2
 	gr_table_column(table, "IFACE", GR_DISP_LEFT); // 3
 	gr_table_column(table, "VTEP", GR_DISP_LEFT); // 4
-	gr_table_column(table, "FLAGS", GR_DISP_STR_ARRAY); // 5
-	gr_table_column(table, "AGE", GR_DISP_RIGHT | GR_DISP_INT); // 6
+	gr_table_column(table, "NHG", GR_DISP_RIGHT | GR_DISP_INT); // 5
+	gr_table_column(table, "FLAGS", GR_DISP_STR_ARRAY); // 6
+	gr_table_column(table, "AGE", GR_DISP_RIGHT | GR_DISP_INT); // 7
 
 	gr_api_client_stream_foreach (fdb, ret, c, GR_FDB_LIST, sizeof(req), &req) {
 		gr_table_cell(table, 0, "%s", iface_name_from_id(c, fdb->bridge_id));
@@ -134,11 +135,13 @@ static cmd_status_t fdb_show(struct gr_api_client *c, const struct ec_pnode *p) 
 
 		if (fdb->vtep.af != GR_AF_UNSPEC)
 			gr_table_cell(table, 4, ADDR_F, ADDR_W(fdb->vtep.af), &fdb->vtep.addr);
+		if (fdb->nhg_id != 0)
+			gr_table_cell(table, 5, "%u", fdb->nhg_id);
 
 		if (fdb_format_flags(flags, sizeof(flags), fdb->flags))
-			gr_table_cell(table, 5, "%s", flags);
+			gr_table_cell(table, 6, "%s", flags);
 
-		gr_table_cell(table, 6, "%ld", (gr_clock_ns() - fdb->last_seen) / GR_NS_PER_S);
+		gr_table_cell(table, 7, "%ld", (gr_clock_ns() - fdb->last_seen) / GR_NS_PER_S);
 
 		if (gr_table_print_row(table) < 0)
 			break;

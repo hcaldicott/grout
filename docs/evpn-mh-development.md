@@ -29,7 +29,8 @@ dataplane development; it does not represent physical NIC performance.
 | Local Ethernet Segment | Pass | FRR reports the local ES up, bridge-port capable and ready for BGP. |
 | EVPN Type-4 route | Pass | The Ethernet Segment route is exchanged between PEs. |
 | ES-to-VNI association | Prototype | Synthetic bridge VLAN metadata gives FRR the VLAN/VNI relationship absent from Grout's VLAN-abstracted bridge model. |
-| EVPN Type-1 processing | Blocked | Receiving a remote ES reaches FRR's L2 nexthop allocator, which bypasses the dataplane provider and calls Linux netlink directly. Zebra crashes because the Grout namespace has no kernel netlink command socket. |
+| EVPN Type-1 routes | Pass with FRR prototype | Both PEs advertise per-ES and per-EVI routes; the remote PE receives all four paths without a zebra crash. |
+| FRR L2 NH/NHG handoff | Prototype | A bundled FRR patch queues the L2 nexthops through the dataplane provider. Grout currently rejects them cleanly because its L2 NHG API is not implemented. |
 | MAC ECMP | Missing | Grout FDB entries contain one output interface and one VTEP, not an L2 nexthop group. |
 | DF and split-horizon enforcement | Missing | The Grout provider does not implement `DPLANE_OP_BR_PORT_UPDATE`; the bridge datapath has no non-DF gate or ES peer-VTEP filter. |
 | Uplink tracking/protodown | Missing | The Grout provider does not implement the relevant `DPLANE_OP_INTF_UPDATE` state. |
@@ -77,17 +78,18 @@ Acceptance criteria:
 
 ### 2. Route EVPN L2 nexthops through the FRR dataplane API
 
-Status: design required; current hard blocker.
+Status: prototype tested; upstream-quality tests and review required.
 
 Patch FRR so L2 FDB nexthop and MAC-ECMP group install/delete operations are
 queued to dataplane providers instead of calling netlink directly. Preserve
 the Linux provider behaviour, including `NHA_FDB`, and expose the L2 nexthop
 ID, VTEP address and group members to non-kernel providers.
 
-The preferred result is an upstream-quality FRR change. Reusing ordinary
-`DPLANE_OP_NH_*` may be possible if the context explicitly preserves the L2
-type and the kernel encoder adds `NHA_FDB`; otherwise add narrowly scoped L2
-NH/NHG operations. Do not add a Grout-only callback inside FRR.
+The working prototype reuses ordinary `DPLANE_OP_NH_*`, preserves FRR's
+L2-typed IDs, and adds `NHA_FDB` in the Linux encoder. It deliberately avoids a
+Grout-only callback inside FRR. Before proposing it upstream, add focused FRR
+tests for IPv4 and IPv6 VTEPs, groups, deletes, provider failure and the Linux
+netlink encoding.
 
 Acceptance criteria:
 
@@ -214,7 +216,8 @@ qualification.
 
 1. Turn the synthetic bridge-VLAN prototype into a bounded translation with
    add/update/delete tests.
-2. Propose and test an FRR dataplane representation for L2 NH/NHG operations.
-3. Add a provider test before implementing the Grout L2 NHG API.
+2. Add FRR tests for the working L2 NH/NHG dataplane representation and prepare
+   it for upstream review.
+3. Add a Grout provider test before implementing the Grout L2 NHG API.
 4. Extend the three-node probe one phase at a time: ES-EVI, Type-1, L2 NHG,
    DF/split horizon, failure convergence, then VM migration.

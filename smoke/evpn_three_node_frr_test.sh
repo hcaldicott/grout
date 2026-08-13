@@ -188,6 +188,10 @@ evpn_mh_install_failure_logged() {
 	grep -q 'Failed to install EVPN-MH L2 nexthop ID (' "$tmp/${nodes[2]}.log"
 }
 
+evpn_mh_delete_failure_logged() {
+	grep -q 'Failed to uninstall EVPN-MH L2 nexthop ID (' "$tmp/${nodes[2]}.log"
+}
+
 failure_probe_objects_intact() {
 	local id
 
@@ -507,7 +511,24 @@ configure_mh_carrier() {
 			fail "Zebra stopped responding after an EVPN-MH L2 install failure"
 		failure_probe_objects_intact ||
 			fail "failed L2 install replaced or corrupted an existing L3 nexthop"
-		echo "PASS: FRR reported a rejected EVPN-MH L2 install and remained healthy"
+
+		# Withdraw the ES so FRR tries to delete the typed objects it allocated.
+		# The provider must make that delete conditional on type and origin: an
+		# ID-only delete would destroy the unrelated objects used for collision.
+		for index in 1 2; do
+			vtysh -N "${nodes[$((index - 1))]}" <<-EOF
+			configure terminal
+			interface carrier
+			 no evpn mh es-id
+			EOF
+		done
+		wait_until "FRR EVPN-MH L2 dataplane delete failure result" \
+			evpn_mh_delete_failure_logged
+		failure_probe_objects_intact ||
+			fail "failed L2 delete removed an object owned by another type/origin"
+		evpn_peers_established "${nodes[2]}" ||
+			fail "Zebra stopped responding after an EVPN-MH L2 delete failure"
+		echo "PASS: FRR reported rejected EVPN-MH L2 install/delete operations and remained healthy"
 		return
 	fi
 

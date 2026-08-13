@@ -1143,12 +1143,14 @@ The fork adds:
 
 Resolving the group by ID at packet time avoids retaining a stale FDB pointer
 when FRR deletes and recreates a group. Group and policy changes use existing
-Grout lifetime/RCU patterns.
+Grout lifetime/RCU patterns. FRR requests atomic type/origin-conditional
+deletes, preventing a rejected typed-L2 install from later deleting a different
+object that owns the same numeric ID.
 
 Remaining work:
 
-- focused create/replace/delete ordering tests;
-- behavior when a group temporarily has zero members;
+- concurrent FDB/group replacement stress and sanitizer coverage;
+- longer repeated behavior while a group temporarily has zero members;
 - explicit counters for invalid or missing groups;
 - review of weighted-group behavior for equal carrier members;
 - mixed local/remote group support if the any-host 20 Gb/s requirement remains
@@ -1328,7 +1330,7 @@ live migration.
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
 | Bridge-port lifecycle | Unit, restart and ES-removal pass | Desired policy is retained before bridge readiness, replayed after a carrier-facing FRR restart, and deleted from active/pending state when FRR removes the ES. LACP remains synchronized. |
-| FRR provider rejection | Prototype pass | A forced typed-ID/type collision is reported as a failed L2 install; Zebra stays healthy with established EVPN sessions and Grout preserves the existing objects. |
+| FRR provider rejection | Prototype pass | A forced typed-ID/type collision is reported for install and conditional delete; Zebra stays healthy with established EVPN sessions and Grout preserves the existing objects. |
 | FRR stack restart | Prototype pass | Remote and carrier-facing stop/start recover provider subscription, EVPN peers, NHG/policy state and traffic. Zebra-only phased restart storms remain. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |

@@ -31,8 +31,11 @@ dataplane development; it does not represent physical NIC performance.
 | ES-to-VNI association | Prototype | Synthetic bridge VLAN metadata gives FRR the VLAN/VNI relationship absent from Grout's VLAN-abstracted bridge model. |
 | EVPN Type-1 routes | Pass with FRR prototype | Both PEs advertise per-ES and per-EVI routes; the remote PE receives all four paths without a zebra crash. |
 | FRR L2 NH/NHG handoff | Prototype pass | The provider installs FRR's typed L2 VTEPs and two-member MAC-ECMP group in Grout. |
+| Datapath/NHG concurrency | Pass | Nexthop ID hashing is concurrent-reader/writer safe; live group replacements publish an immutable state and pass traffic-churn smoke coverage. |
+| IPv4 fragment affinity | Pass | DF-only packets use L4 ports; first and later fragments share the L3-only hash. |
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
 | DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
+| Bridge-port ordering | Unit pass | Policy can arrive before bridge readiness, becomes active on interface reconciliation and is safely deactivated/replayed across mode changes. Restart smoke coverage remains outstanding. |
 | Uplink tracking/protodown | Prototype pass | FRR `DPLANE_OP_INTF_UPDATE` drives explicit Grout LACP-member protodown. Ordinary ingress and egress are suppressed, LACP remains live, remote NHGs withdraw, and both the carrier member and NHG recover in the three-node lab. |
 | Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
 | Zebra restart | Harness gap | Grout retains forwarding state when Zebra exits, but the namespace-local FRR launcher cannot yet perform WatchFRR's phased dependency restart and integrated-config replay reliably. A dedicated restart wrapper is required before this becomes a gating smoke test. |
@@ -258,13 +261,14 @@ qualification.
 
 ## Immediate work queue
 
-1. Turn the synthetic bridge-VLAN prototype into a bounded translation with
-   add/update/delete tests.
-2. Add FRR tests for the working L2 NH/NHG dataplane representation and prepare
-   it for upstream review.
-3. Add focused Grout L2 NH/NHG create, replace and deletion-order unit tests.
-4. Add bridge-port restart and delete-ordering tests, then prepare the API and
-   dataplane changes for upstream review.
+1. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
+   allocation beyond the current fail-closed single synthetic VLAN.
+2. Add FRR failure-injection tests for the working L2 NH/NHG dataplane
+   representation and prepare it for upstream review.
+3. Extend the passing live NHG replacement smoke coverage with L2 create and
+   deletion-order failure injection.
+4. Add bridge-port restart and delete-ordering smoke tests, then prepare the API
+   and dataplane changes for upstream review.
 5. Harden the protodown prototype with repeated failure loops and provider/API
    unit coverage suitable for upstream review.
 6. Add a namespace-aware FRR phased-restart wrapper, then extend convergence

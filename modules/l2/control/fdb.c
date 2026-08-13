@@ -8,6 +8,7 @@
 #include "l2.h"
 #include "log.h"
 #include "module.h"
+#include "nexthop.h"
 #include "rcu.h"
 
 #include <rte_common.h>
@@ -214,11 +215,17 @@ int fdb_del_local(uint16_t bridge_id, const struct rte_ether_addr *mac) {
 static struct api_out fdb_add(const void *request, struct api_ctx *) {
 	const struct gr_fdb_add_req *req = request;
 	const struct iface *iface;
+	struct nexthop *nhg;
 	struct fdb_entry *e;
 	int ret;
 
 	if (req->fdb.flags & ~(GR_FDB_F_STATIC | GR_FDB_F_EXTERN))
 		return api_out(EINVAL, 0, NULL);
+	if (req->fdb.nhg_id != GR_NH_ID_UNSET
+	    && (nhg = nexthop_lookup_id(req->fdb.nhg_id)) != NULL
+	    && (nhg->type != GR_NH_T_GROUP
+		|| nexthop_group_member_type(nhg) != GR_NH_T_L2))
+		return api_out(EPROTOTYPE, 0, NULL);
 
 	iface = iface_from_id(req->fdb.iface_id);
 	if (iface == NULL)

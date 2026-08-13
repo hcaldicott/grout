@@ -35,7 +35,7 @@ This backlog complements:
 | ID | Gap | Priority | Status | Production impact |
 | --- | --- | --- | --- | --- |
 | HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Deferred for architecture | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
-| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with direct and provider-failure smoke coverage | Core ordering/type invariants and rejected provider installs pass; timeouts, delete failures and partial replay remain. |
+| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with direct and provider-failure smoke coverage | Core ordering/type invariants and rejected provider installs/deletes pass; timeouts and partial replay remain. |
 | RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype with stack-restart coverage | Remote and carrier-facing FRR stack replay passes; daemon-specific restart storms remain. |
 | FRR-001 | Upstream FRR dataplane abstraction changes | P0 | Prototype | The project carries an FRR 10.6.1 fork and rebase burden. |
 | MIG-001 | Migration-compatible VM attachment | P0 | Open | Seamless migration cannot be claimed until vhost-user reconnect and switchover are validated. |
@@ -246,9 +246,11 @@ under live traffic.
 
 The same harness can now reserve FRR's first typed L2 NH/NHG IDs as existing L3
 objects. This forces Grout to reject the provider update on a forwarding-class
-mismatch. Zebra reports the asynchronous install failure, remains responsive
-with both EVPN peers established, and does not replace or corrupt the existing
-objects. Provider timeout, failed delete and partial-replay injection remain.
+mismatch. Zebra reports asynchronous install and delete failures, remains
+responsive with both EVPN peers established, and does not replace, corrupt or
+delete the existing objects. FRR uses atomic type/origin-conditional deletes so
+a rejected install cannot later remove the conflicting object's owner. Provider
+timeout and partial-replay injection remain.
 
 #### Acceptance tests
 
@@ -273,15 +275,15 @@ helpers directly. The fork now routes typed L2 objects through the dataplane
 provider while preserving Linux `NHA_FDB` behavior.
 
 The implementation also has explicit typed-L2 completion handling. The
-successful path and a rejected install result are covered by the three-node
-lab, but the changes are not upstream and remain a high-maintenance fork
-surface.
+successful path and rejected install/delete results are covered by the
+three-node lab, but the changes are not upstream and remain a high-maintenance
+fork surface.
 
 #### Remaining work
 
 - Add focused FRR provider/topotests for IPv4 and IPv6 VTEPs, group
   add/replace/delete, Linux netlink encoding and provider failure results.
-- Verify the remaining typed-L2 completion cases, especially failed deletes,
+- Verify the remaining typed-L2 completion cases, especially transport
   timeouts and superseded operations.
 - Separate generally useful FRR fixes from Grout-specific provider work.
 - Submit the generic dataplane fix upstream and respond to review.
@@ -463,7 +465,7 @@ The following findings are closed and should remain regression-tested:
 | Mixed L2/L3 groups | Mixed and nested groups and invalid route/FDB uses are rejected. |
 | Silent synthetic-VLAN collapse | Unsupported tagged state fails visibly at the provider boundary. General multi-VLAN support remains VLAN-001. |
 | Bridge policy lifecycle | Desired state is retained and reconciled on interface add/reconfiguration; an empty FRR update deletes active and pending policy; restart replay and ES removal pass end to end. Deletion-first and storm coverage remain RESTART-001. |
-| Ambiguous FRR typed-L2 completion | Explicit completion handling was added; a rejected install is logged without a Zebra crash or object corruption. Delete-failure and upstream work remain FRR-001. |
+| Ambiguous FRR typed-L2 completion | Explicit completion handling was added; rejected installs and conditional deletes are logged without a Zebra crash or cross-owner object corruption. Timeout and upstream work remain FRR-001. |
 
 ## Recommended implementation order
 

@@ -172,9 +172,14 @@ static int bond_attach_member(struct iface *iface, struct iface *member) {
 	m->iface = member;
 	bond->n_members++;
 
-	if (bond_mac_set(iface, &zero) < 0) {
+	if (rte_is_zero_ether_addr(&bond->mac)) {
+		if (bond_mac_set(iface, &zero) < 0) {
+			bond->n_members--;
+			return errno_log(errno, "bond_mac_set");
+		}
+	} else if (iface_add_eth_addr(member, &bond->mac) < 0) {
 		bond->n_members--;
-		return errno_log(errno, "bond_mac_set");
+		return errno_log(errno, "iface_add_eth_addr(member)");
 	}
 
 	bond_update_active_members(iface);

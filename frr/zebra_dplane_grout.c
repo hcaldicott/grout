@@ -471,6 +471,8 @@ static void grout_sync_nh_groups(struct event *) {
 	gr_api_client_stream_foreach (
 		nh, ret, grout_ctx.sync_client, GR_NH_LIST, sizeof(nh_req), &nh_req
 	) {
+		if ((nh->nh_id >> NHG_ID_TYPE_POS) == NHG_TYPE_L2)
+			continue;
 		grout_nexthop_group_add(nh, true);
 	}
 	if (ret < 0) {
@@ -508,7 +510,7 @@ static void grout_sync_nhs(struct event *e) {
 	gr_api_client_stream_foreach (
 		nh, ret, grout_ctx.sync_client, GR_NH_LIST, sizeof(nh_req), &nh_req
 	) {
-		if (nh->type != GR_NH_T_GROUP)
+		if (nh->type != GR_NH_T_GROUP && nh->type != GR_NH_T_L2)
 			grout_nexthop_change(true, nh, true);
 	}
 	if (ret < 0) {

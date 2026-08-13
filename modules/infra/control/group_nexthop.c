@@ -92,8 +92,10 @@ remove:
 	state->nh = dst == 1 ? state->members[0].nh : NULL;
 	if (dst > 1)
 		group_reta_distribute(dst, state->reta_size, state->members, state->reta);
-	if (dst == 0)
-		state->member_type = GR_NH_T_ALL;
+	// Keep the forwarding class when the last member disappears. The group may
+	// still be referenced by an FDB or route while FRR reorders delete/create
+	// operations; allowing the empty group to change class would weaken those
+	// references after it is repopulated.
 
 	atomic_store_explicit(&group->state, state, memory_order_release);
 }

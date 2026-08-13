@@ -39,9 +39,38 @@ grcli nexthop add l3 iface p1 address 172.16.1.2 id 101
 grcli nexthop add group id 10 member 100 member 101
 grcli route add 192.200.0.0/24 via id 10
 
+# Groups are homogeneous forwarding objects. Reject combinations that would
+# make the datapath reinterpret one member's private data as another type.
+grcli nexthop add blackhole id 102
+if grcli nexthop add group id 11 member 100 member 102; then
+	fail "mixed L3/blackhole nexthop group was accepted"
+fi
+grcli nexthop add group id 12 member 102
+if grcli nexthop add group id 12 member 100; then
+	fail "existing nexthop group changed forwarding type"
+fi
+grcli nexthop add group id 13
+if grcli route add 203.0.113.0/24 via id 13; then
+	fail "empty untyped nexthop group was attached to an IP route"
+fi
+
 # Locally generated ICMP requests
 grcli ping 192.200.0.2 count 1 ident 1 delay 10
 grcli ping 192.200.0.2 count 1 ident 2 delay 10
 
+# Replace the live group repeatedly while traffic is using it. Readers must see
+# one complete immutable group state, never a mixture of old and new fields.
+(
+	for i in $(seq 1 50); do
+		if ((i % 2)); then
+			grcli nexthop add group id 10 member 100 member 101
+		else
+			grcli nexthop add group id 10 member 101 member 100
+		fi
+	done
+) &
+group_updater=$!
+
 # Externally generated ICMP requests
-ip netns exec n0 ping -i0.01 -c3 -n 192.200.0.2
+ip netns exec n0 ping -i0.01 -c100 -n 192.200.0.2
+wait "$group_updater"

@@ -27,6 +27,9 @@ nodes=("$prefix-n1" "$prefix-n2" "$prefix-n3")
 grout_pids=()
 mh_enabled="${EVPN_MH_PROBE:-false}"
 stress_cycles="${EVPN_MH_STRESS_CYCLES:-2}"
+failure_probe="${EVPN_MH_FAILURE_PROBE:-false}"
+failure_probe_ids=(268435457 268435458 268435459 268435460 \
+	536870913 536870914 536870915 536870916)
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -175,6 +178,33 @@ frr_subscription_after_line() {
 	local first_line="$2"
 
 	tail -n +"$first_line" "$logfile" | grep -q "GROUT:.*iface/ip events"
+}
+
+evpn_mh_install_failure_logged() {
+	grep -q 'Failed to install EVPN-MH L2 nexthop ID (' "$tmp/${nodes[2]}.log"
+}
+
+failure_probe_objects_intact() {
+	local id
+
+	for id in "${failure_probe_ids[@]}"; do
+		grcli -s "$tmp/grout3.sock" -j nexthop show id "$id" 2>/dev/null |
+			jq -e '.type | ascii_downcase == "l3"' >/dev/null || return 1
+	done
+}
+
+seed_evpn_mh_failure_probe() {
+	local id
+
+	# FRR reserves type 1 (0x1...) for an L2 VTEP nexthop and type 2
+	# (0x2...) for an L2 nexthop group. Occupying the first few values with
+	# L3 objects forces the provider's exist-ok update to fail closed on a
+	# forwarding-class mismatch. This deliberately tests Zebra's asynchronous
+	# dataplane failure-result path; it is not a production configuration.
+	for id in "${failure_probe_ids[@]}"; do
+		grcli -s "$tmp/grout3.sock" nexthop add l3 iface underlay id "$id"
+	done
+	failure_probe_objects_intact || fail "could not seed typed-ID collision objects"
 }
 
 local_fdb_has_mac() {
@@ -465,6 +495,17 @@ configure_mh_carrier() {
 		bridge_port_policy_is "$tmp/grout1.sock" false 172.16.0.2
 	wait_until "PE2 non-DF bridge-port policy" \
 		bridge_port_policy_is "$tmp/grout2.sock" true 172.16.0.1
+
+	if [ "$failure_probe" = true ]; then
+		wait_until "FRR EVPN-MH L2 dataplane failure result" \
+			evpn_mh_install_failure_logged
+		evpn_peers_established "${nodes[2]}" ||
+			fail "Zebra stopped responding after an EVPN-MH L2 install failure"
+		failure_probe_objects_intact ||
+			fail "failed L2 install replaced or corrupted an existing L3 nexthop"
+		echo "PASS: FRR reported a rejected EVPN-MH L2 install and remained healthy"
+		return
+	fi
 
 	if [ "${EVPN_MH_DATA_PLANE:-false}" != true ]; then
 		echo "PASS: EVPN-MH control plane converged"
@@ -911,6 +952,9 @@ for node in "${nodes[@]}"; do
 done
 
 if [ "$mh_enabled" = true ]; then
+	if [ "$failure_probe" = true ]; then
+		seed_evpn_mh_failure_probe
+	fi
 	configure_mh_carrier
 fi
 

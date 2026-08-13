@@ -72,15 +72,20 @@ void lacp_input_cb(void *obj, uintptr_t, const struct control_queue_drain *drain
 	bool remote_sync = member->remote.state & LACP_STATE_SYNCHRONIZED;
 	bool remote_collect = member->remote.state & LACP_STATE_COLLECTING;
 
-	member->local.state |= LACP_STATE_SYNCHRONIZED;
-	member->local.state &= ~(LACP_STATE_EXPIRED | LACP_STATE_DEFAULTED);
-	if (remote_sync) {
-		member->local.state |= LACP_STATE_COLLECTING;
-		if (remote_collect)
-			member->local.state |= LACP_STATE_DISTRIBUTING;
+	member->local.state &= ~(
+		LACP_STATE_SYNCHRONIZED | LACP_STATE_COLLECTING | LACP_STATE_DISTRIBUTING
+		| LACP_STATE_EXPIRED | LACP_STATE_DEFAULTED
+	);
+	if (!member->protodown) {
+		member->local.state |= LACP_STATE_SYNCHRONIZED;
+		if (remote_sync) {
+			member->local.state |= LACP_STATE_COLLECTING;
+			if (remote_collect)
+				member->local.state |= LACP_STATE_DISTRIBUTING;
+		}
 	}
 
-	member->active = remote_sync && remote_collect;
+	member->active = !member->protodown && remote_sync && remote_collect;
 
 	// Update bond active members list if member state changed
 	if (old_active != member->active)
@@ -198,6 +203,11 @@ static void lacp_init(struct event_base *ev_base) {
 static void lacp_fini(struct event_base *) {
 	if (lacp_timer != NULL)
 		event_free(lacp_timer);
+}
+
+void lacp_wakeup(void) {
+	if (lacp_timer != NULL)
+		event_active(lacp_timer, 0, 0);
 }
 
 static struct module lacp_module = {

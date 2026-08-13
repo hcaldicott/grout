@@ -209,6 +209,8 @@ static ssize_t iface_flags_format(char *buf, size_t len, const struct gr_iface *
 		SAFE_BUF(snprintf, len, "down");
 	if (iface->state & GR_IFACE_S_RUNNING)
 		SAFE_BUF(snprintf, len, " running");
+	if (iface->state & GR_IFACE_S_PROTODOWN)
+		SAFE_BUF(snprintf, len, " protodown");
 	if (iface->state & GR_IFACE_S_PROMISC_FIXED)
 		SAFE_BUF(snprintf, len, " promisc(fixed)");
 	else if (iface->flags & GR_IFACE_F_PROMISC)

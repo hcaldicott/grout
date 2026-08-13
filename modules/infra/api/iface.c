@@ -220,6 +220,7 @@ static int iface_event_serialize(const void *obj, void **buf) {
 
 METRIC_GAUGE(m_up, "iface_up", "Interface administrative state.");
 METRIC_GAUGE(m_running, "iface_running", "Interface operational state.");
+METRIC_GAUGE(m_protodown, "iface_protodown", "Interface protocol-down state.");
 METRIC_GAUGE(m_mtu, "iface_mtu", "Interface maximum transmission unit.");
 METRIC_GAUGE(m_promisc, "iface_promisc", "Interface promiscuous mode.");
 METRIC_COUNTER(m_rx_packets, "iface_rx_packets", "Number of received packets.");
@@ -288,6 +289,7 @@ static void iface_metrics_collect(struct metrics_writer *w) {
 
 		metric_emit(&ctx, &m_up, !!(iface->flags & GR_IFACE_F_UP));
 		metric_emit(&ctx, &m_running, !!(iface->state & GR_IFACE_S_RUNNING));
+		metric_emit(&ctx, &m_protodown, !!(iface->state & GR_IFACE_S_PROTODOWN));
 		metric_emit(&ctx, &m_mtu, iface->mtu);
 		metric_emit(&ctx, &m_promisc, !!(iface->flags & GR_IFACE_F_PROMISC));
 

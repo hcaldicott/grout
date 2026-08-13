@@ -5,6 +5,7 @@
 #include "iface.h"
 #include "l2.h"
 #include "mbuf.h"
+#include "rxtx.h"
 
 #include <gr_infra.h>
 
@@ -72,6 +73,14 @@ static uint16_t bridge_flood_process(
 
 			if (!(member->flags & GR_IFACE_F_UP))
 				continue; // Skip down interfaces
+
+			if (iface->type == GR_IFACE_TYPE_VXLAN
+			    && bridge_port_policy_blocks_overlay(
+				    bridge_port_policy_get(member->id),
+				    &iface_mbuf_data(m)->vtep,
+				    true
+			    ))
+				continue;
 
 			copy = copy_packet(m, flood_count, member);
 			if (copy == NULL)

@@ -3,6 +3,7 @@
 
 cli_src += files(
     'bridge.c',
+    'bridge_port.c',
     'flood.c',
     'fdb.c',
     'vxlan.c',

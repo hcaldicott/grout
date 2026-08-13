@@ -2,10 +2,9 @@
 // Copyright (c) 2024 Christophe Fontaine, Red Hat
 // Copyright (c) 2025 Maxime Leroy, Free Mobile
 
+#include <lib/queue.h>
 #include <lib/zebra.h>
 #include <linux/rtnetlink.h>
-
-#include <lib/queue.h>
 
 // clang-format off
 #include <gr_api_client_impl.h>
@@ -877,6 +876,53 @@ static void zebra_read_notifications(struct event *event) {
 	);
 }
 
+static enum zebra_dplane_result grout_bridge_port_update_ctx(struct zebra_dplane_ctx *ctx) {
+	struct gr_bridge_port_set_req req = {0};
+	const struct ipaddr *filters;
+	uint32_t filter_count;
+
+	req.policy.iface_id = ifindex_frr_to_grout(dplane_ctx_get_ifindex(ctx));
+	if (req.policy.iface_id == GR_IFACE_ID_UNDEF) {
+		gr_log_err(
+			"BR_PORT_UPDATE: no Grout mapping for FRR ifindex %u (%s)",
+			dplane_ctx_get_ifindex(ctx),
+			dplane_ctx_get_ifname(ctx)
+		);
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
+
+	if (dplane_ctx_get_br_port_flags(ctx) & DPLANE_BR_PORT_NON_DF)
+		req.policy.flags |= GR_BRIDGE_PORT_F_NON_DF;
+	req.policy.backup_nhg_id = dplane_ctx_get_br_port_backup_nhg_id(ctx);
+
+	filter_count = dplane_ctx_get_br_port_sph_filter_cnt(ctx);
+	if (filter_count > GR_BRIDGE_PORT_MAX_SPH_FILTERS) {
+		gr_log_err(
+			"BR_PORT_UPDATE: %u split-horizon VTEPs exceed Grout limit %u",
+			filter_count,
+			GR_BRIDGE_PORT_MAX_SPH_FILTERS
+		);
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
+	req.policy.n_sph_filters = filter_count;
+	filters = dplane_ctx_get_br_port_sph_filters(ctx);
+	for (uint32_t i = 0; i < filter_count; i++)
+		ipaddr_to_l3_addr(&req.policy.sph_filters[i], &filters[i]);
+
+	gr_log_debug(
+		"BR_PORT_UPDATE: iface=%u non-df=%u backup-nhg=%u sph-count=%u",
+		req.policy.iface_id,
+		!!(req.policy.flags & GR_BRIDGE_PORT_F_NON_DF),
+		req.policy.backup_nhg_id,
+		req.policy.n_sph_filters
+	);
+
+	if (grout_client_send_recv(GR_BRIDGE_PORT_SET, sizeof(req), &req, NULL) < 0)
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+
+	return ZEBRA_DPLANE_REQUEST_SUCCESS;
+}
+
 // Grout provider callback.
 static enum zebra_dplane_result zd_grout_process_update(struct zebra_dplane_ctx *ctx) {
 	switch (dplane_ctx_get_op(ctx)) {
@@ -906,6 +952,9 @@ static enum zebra_dplane_result zd_grout_process_update(struct zebra_dplane_ctx 
 	case DPLANE_OP_VTEP_ADD:
 	case DPLANE_OP_VTEP_DELETE:
 		return grout_vxlan_flood_update_ctx(ctx);
+
+	case DPLANE_OP_BR_PORT_UPDATE:
+		return grout_bridge_port_update_ctx(ctx);
 
 	case DPLANE_OP_SRV6_ENCAP_SRCADDR_SET:
 		return grout_set_sr_tunsrc(ctx);

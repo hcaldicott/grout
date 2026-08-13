@@ -20,6 +20,7 @@ enum edges {
 	OUT_IFACE_INVAL,
 	NHG_INVAL,
 	FLOOD_DISABLED,
+	SPLIT_HORIZON,
 	EDGE_COUNT
 };
 
@@ -28,13 +29,41 @@ struct bridge_input_trace {
 	uint16_t bridge_id;
 };
 
+static const struct iface *bridge_vxlan_member(const struct iface_info_bridge *bridge) {
+	for (uint16_t i = 0; i < bridge->n_members; i++)
+		if (bridge->members[i]->type == GR_IFACE_TYPE_VXLAN
+		    && (bridge->members[i]->flags & GR_IFACE_F_UP))
+			return bridge->members[i];
+	return NULL;
+}
+
+static bool bridge_nhg_select_vtep(struct rte_mbuf *m, uint32_t nhg_id, struct l3_addr *vtep) {
+	struct nexthop *nh = nexthop_lookup_id(nhg_id);
+	uint32_t flow_hash;
+
+	if (nh == NULL || nh->type != GR_NH_T_GROUP)
+		return false;
+
+	flow_hash = gr_mbuf_flow_hash(m, GR_MBUF_FLOW_HASH_RSS);
+	if (!(m->ol_flags & RTE_MBUF_F_RX_RSS_HASH)) {
+		m->hash.rss = flow_hash;
+		m->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
+	}
+	nh = nexthop_group_get_nh(nexthop_info_group(nh), flow_hash);
+	if (nh == NULL || nh->type != GR_NH_T_L2)
+		return false;
+
+	*vtep = nexthop_info_l2(nh)->vtep;
+	return true;
+}
+
 static uint16_t bridge_input_process(
 	struct rte_graph *graph,
 	struct rte_node *node,
 	void **objs,
 	uint16_t nb_objs
 ) {
-	const struct iface *bridge, *iface;
+	const struct iface *bridge, *iface, *ingress;
 	const struct iface_info_bridge *br;
 	const struct gr_fdb_entry *fdb;
 	struct iface_mbuf_data *d;
@@ -45,6 +74,7 @@ static uint16_t bridge_input_process(
 	for (uint16_t i = 0; i < nb_objs; i++) {
 		m = objs[i];
 		d = iface_mbuf_data(m);
+		ingress = d->iface;
 		eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 		fdb = NULL;
 
@@ -77,8 +107,28 @@ static uint16_t bridge_input_process(
 				goto next;
 			}
 			if (fdb->iface_id == d->iface->id) {
-				// Don't forward back to source interface
-				edge = HAIRPIN;
+				const struct gr_bridge_port_policy *policy = bridge_port_policy_get(
+					ingress->id
+				);
+
+				// EVPN-MH local bias: a MAC learned on the local ES may
+				// actually sit behind another PE. Redirect the hairpin via
+				// the ES backup NHG instead of dropping it locally.
+				if (policy == NULL || policy->backup_nhg_id == GR_NH_ID_UNSET) {
+					edge = HAIRPIN;
+					goto next;
+				}
+				iface = bridge_vxlan_member(br);
+				if (iface == NULL) {
+					edge = OUT_IFACE_INVAL;
+					goto next;
+				}
+				if (!bridge_nhg_select_vtep(m, policy->backup_nhg_id, &d->vtep)) {
+					edge = NHG_INVAL;
+					goto next;
+				}
+				d->iface = iface;
+				edge = OUTPUT;
 				goto next;
 			}
 			iface = iface_from_id(fdb->iface_id);
@@ -87,23 +137,20 @@ static uint16_t bridge_input_process(
 				goto next;
 			}
 			// Direct output to learned interface
+			if (ingress->type == GR_IFACE_TYPE_VXLAN
+			    && bridge_port_policy_blocks_overlay(
+				    bridge_port_policy_get(iface->id), &d->vtep, false
+			    )) {
+				edge = SPLIT_HORIZON;
+				goto next;
+			}
+
 			d->iface = iface;
 			if (fdb->nhg_id != GR_NH_ID_UNSET) {
-				struct nexthop *nh = nexthop_lookup_id(fdb->nhg_id);
-
-				if (nh == NULL || nh->type != GR_NH_T_GROUP) {
+				if (!bridge_nhg_select_vtep(m, fdb->nhg_id, &d->vtep)) {
 					edge = NHG_INVAL;
 					goto next;
 				}
-				nh = nexthop_group_get_nh(
-					nexthop_info_group(nh),
-					gr_mbuf_flow_hash(m, GR_MBUF_FLOW_HASH_RSS)
-				);
-				if (nh == NULL || nh->type != GR_NH_T_L2) {
-					edge = NHG_INVAL;
-					goto next;
-				}
-				d->vtep = nexthop_info_l2(nh)->vtep;
 			} else {
 				d->vtep = fdb->vtep;
 			}
@@ -158,6 +205,7 @@ static struct rte_node_register node = {
 		[OUT_IFACE_INVAL] = "bridge_input_invalid_output",
 		[NHG_INVAL] = "bridge_input_invalid_nhg",
 		[FLOOD_DISABLED] = "bridge_input_flood_disabled",
+		[SPLIT_HORIZON] = "bridge_input_split_horizon",
 	},
 };
 
@@ -175,3 +223,4 @@ GR_DROP_REGISTER(bridge_input_hairpin);
 GR_DROP_REGISTER(bridge_input_invalid_output);
 GR_DROP_REGISTER(bridge_input_invalid_nhg);
 GR_DROP_REGISTER(bridge_input_flood_disabled);
+GR_DROP_REGISTER(bridge_input_split_horizon);

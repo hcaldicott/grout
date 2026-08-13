@@ -34,7 +34,8 @@ dataplane development; it does not represent physical NIC performance.
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
 | DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
 | Uplink tracking/protodown | Missing | The Grout provider does not implement the relevant `DPLANE_OP_INTF_UPDATE` state. |
-| Startup MAC reconciliation | Known gap | A carrier MAC learned before its ES-EVI is ready can remain advertised without an ESI. The converged dataplane test pins the simulated carrier MAC on both ES members; restart/reconciliation must upgrade existing learned entries automatically. |
+| Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
+| Zebra restart | Harness gap | Grout retains forwarding state when Zebra exits, but the namespace-local FRR launcher cannot yet perform WatchFRR's phased dependency restart and integrated-config replay reliably. A dedicated restart wrapper is required before this becomes a gating smoke test. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
 FRR 10.6.1 already calculates the EVPN-MH control-plane state. The bundled
@@ -131,7 +132,7 @@ Acceptance criteria:
 
 ### 4. Enforce DF state and split horizon
 
-Status: prototype tested; lifecycle and restart coverage remain.
+Status: prototype tested; delete ordering and restart coverage remain.
 
 Implement `DPLANE_OP_BR_PORT_UPDATE` in the Grout FRR provider and corresponding
 Grout APIs. Apply non-DF filtering for BUM traffic, the backup NHG reference and
@@ -163,9 +164,18 @@ Implement the interface-state part of `DPLANE_OP_INTF_UPDATE` needed by FRR
 EVPN-MH. Map protodown and uplink state to Grout bond forwarding state without
 disrupting LACP control packets required for recovery.
 
-Also reconcile local FDB entries when an ES-EVI becomes ready. The current lab
-demonstrated that a carrier MAC learned before that transition may keep a
-non-ESI Type-2 route rather than being upgraded to the ES MAC-ECMP path.
+Local FDB reconciliation is now prototyped. FRR flushes both ES-linked MACs and
+ordinary local MACs linked to the access interface when the ES is attached or
+detached. The dataplane relearns those MACs with the current ESI instead of
+retaining a stale non-ESI Type-2 route.
+
+Protodown must be implemented as LACP member suppression, not as ordinary
+interface administrative-down. FRR applies `DPLANE_OP_INTF_UPDATE` to the bond
+members. Grout must keep receiving and transmitting LACP PDUs while clearing
+collecting/distributing state, remove the member from the transmit hash, reject
+ordinary ingress data on that member, and restore the LACP state machine on
+recovery. Merely dropping bridge traffic would leave the carrier sending to a
+black hole; clearing `GR_IFACE_F_UP` would also prevent LACP recovery.
 
 Acceptance criteria:
 
@@ -246,5 +256,8 @@ qualification.
 3. Add focused Grout L2 NH/NHG create, replace and deletion-order unit tests.
 4. Add bridge-port restart and delete-ordering tests, then prepare the API and
    dataplane changes for upstream review.
-5. Extend failure convergence through carrier-link, underlay and daemon restart
-   cases before beginning the VM migration phase.
+5. Add an explicit LACP-member protodown API and map FRR
+   `DPLANE_OP_INTF_UPDATE` to it, with ingress, egress and recovery tests.
+6. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
+   through carrier-link, underlay and daemon restart cases before beginning the
+   VM migration phase.

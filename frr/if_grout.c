@@ -43,6 +43,41 @@ static uint64_t gr_if_flags_to_netlink(struct gr_iface *gr_if, enum zebra_link_t
 	return frr_if_flags;
 }
 
+static void grout_bridge_vlan_change(const struct gr_iface *gr_if) {
+	struct zebra_dplane_bridge_vlan_info_array *bridge_vlans;
+	struct zebra_dplane_ctx *ctx;
+
+	if (gr_if->mode != GR_IFACE_MODE_BRIDGE)
+		return;
+
+	ctx = dplane_ctx_alloc();
+	dplane_ctx_set_ns_id(ctx, GROUT_NS);
+	dplane_ctx_set_ifindex(ctx, ifindex_grout_to_frr(gr_if->id));
+	dplane_ctx_set_ifname(ctx, gr_if->name);
+	dplane_ctx_set_ifp_family(ctx, AF_BRIDGE);
+	dplane_ctx_set_op(ctx, DPLANE_OP_INTF_INSTALL);
+	dplane_ctx_set_status(ctx, ZEBRA_DPLANE_REQUEST_QUEUED);
+
+	if (gr_if->type == GR_IFACE_TYPE_VXLAN) {
+		struct zebra_dplane_bridge_vlan_info bv = {
+			.flags = DPLANE_BRIDGE_VLAN_INFO_PVID,
+			.vid = GROUT_BRIDGE_VLAN,
+		};
+
+		dplane_ctx_set_ifp_bridge_vlan_info(ctx, &bv);
+	} else {
+		bridge_vlans = XCALLOC(
+			MTYPE_TMP, sizeof(*bridge_vlans) + sizeof(bridge_vlans->array[0])
+		);
+		bridge_vlans->count = 1;
+		bridge_vlans->array[0].flags = DPLANE_BRIDGE_VLAN_INFO_PVID;
+		bridge_vlans->array[0].vid = GROUT_BRIDGE_VLAN;
+		dplane_ctx_set_ifp_bridge_vlan_info_array(ctx, bridge_vlans);
+	}
+
+	dplane_provider_enqueue_to_zebra(ctx);
+}
+
 void grout_link_change(struct gr_iface *gr_if, bool new, bool startup) {
 	gr_log_debug("%s iface %s", new ? "add" : "del", gr_if->name);
 
@@ -226,6 +261,14 @@ void grout_link_change(struct gr_iface *gr_if, bool new, bool startup) {
 #endif
 			dplane_ctx_set_ifp_vxlan_info(ctx, &vi);
 		}
+		if (gr_bridge) {
+			struct zebra_l2info_bridge bi = {0};
+
+			// Grout bridge domains are VLAN-abstracted. Present them as
+			// VLAN-aware so FRR can associate access ports with an EVPN VNI.
+			bi.bridge.vlan_aware = true;
+			dplane_ctx_set_ifp_bridge_info(ctx, &bi);
+		}
 	} else {
 		dplane_ctx_set_op(ctx, DPLANE_OP_INTF_DELETE);
 		dplane_ctx_set_status(ctx, ZEBRA_DPLANE_REQUEST_QUEUED);
@@ -235,6 +278,8 @@ void grout_link_change(struct gr_iface *gr_if, bool new, bool startup) {
 	}
 
 	dplane_provider_enqueue_to_zebra(ctx);
+	if (new)
+		grout_bridge_vlan_change(gr_if);
 }
 
 static void grout_interface_addr_change(

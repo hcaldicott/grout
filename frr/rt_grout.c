@@ -1039,7 +1039,8 @@ void grout_macfdb_change(const struct gr_fdb_entry *fdb, bool new) {
 #else
 	dplane_ctx_mac_set_vtep_ip(ctx, &(struct in_addr) {fdb->vtep.ipv4});
 #endif
-	dplane_ctx_mac_set_vid(ctx, fdb->vlan_id);
+	// Present Grout's untagged FDB as FRR's synthetic access VLAN.
+	dplane_ctx_mac_set_vid(ctx, GROUT_BRIDGE_VLAN);
 	dplane_ctx_mac_set_dp_static(ctx, fdb->flags & GR_FDB_F_STATIC);
 	dplane_ctx_mac_set_local_inactive(ctx, false);
 	dplane_ctx_mac_set_is_sticky(ctx, false);
@@ -1081,7 +1082,7 @@ enum zebra_dplane_result grout_macfdb_update_ctx(struct zebra_dplane_ctx *ctx) {
 		add->exist_ok = true;
 		add->fdb.iface_id = ifindex_frr_to_grout(dplane_ctx_get_ifindex(ctx));
 		add->fdb.bridge_id = ifindex_frr_to_grout(dplane_ctx_mac_get_br_ifindex(ctx));
-		add->fdb.vlan_id = dplane_ctx_mac_get_vlan(ctx);
+		add->fdb.vlan_id = 0;
 		add->fdb.flags = GR_FDB_F_EXTERN;
 		if (dplane_ctx_mac_get_dp_static(ctx))
 			add->fdb.flags |= GR_FDB_F_STATIC;
@@ -1097,7 +1098,7 @@ enum zebra_dplane_result grout_macfdb_update_ctx(struct zebra_dplane_ctx *ctx) {
 		struct gr_fdb_del_req *del = req;
 		del->missing_ok = true;
 		del->bridge_id = ifindex_frr_to_grout(dplane_ctx_mac_get_br_ifindex(ctx));
-		del->vlan_id = dplane_ctx_mac_get_vlan(ctx);
+		del->vlan_id = 0;
 		memcpy(&del->mac, dplane_ctx_mac_get_addr(ctx), sizeof(del->mac));
 		req_type = GR_FDB_DEL;
 	}

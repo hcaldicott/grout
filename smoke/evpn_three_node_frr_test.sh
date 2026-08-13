@@ -26,6 +26,7 @@ hosts=("$prefix-h1" "$prefix-h2" "$prefix-h3")
 nodes=("$prefix-n1" "$prefix-n2" "$prefix-n3")
 grout_pids=()
 mh_enabled="${EVPN_MH_PROBE:-false}"
+stress_cycles="${EVPN_MH_STRESS_CYCLES:-2}"
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -158,6 +159,22 @@ remote_fdb_has_nhg() {
 		jq -e --arg mac "$mac" \
 		'any(.[]; .mac == $mac and .iface == "vxlan100" and .nhg != 0)' \
 		>/dev/null
+}
+
+remote_fdb_lacks_mac() {
+	local sock="$1"
+	local mac="$2"
+
+	! grcli -s "$sock" -j fdb show 2>/dev/null |
+		jq -e --arg mac "$mac" 'any(.[]; .mac == $mac and .iface == "vxlan100")' \
+			>/dev/null
+}
+
+frr_subscription_after_line() {
+	local logfile="$1"
+	local first_line="$2"
+
+	tail -n +"$first_line" "$logfile" | grep -q "GROUT:.*iface/ip events"
 }
 
 local_fdb_has_mac() {
@@ -584,7 +601,119 @@ configure_mh_carrier() {
 	wait_until "remote MAC NHG after PE1 physical carrier recovery" \
 		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
 
-	echo "PASS: EVPN-MH survived both FRR protodown and physical carrier loss"
+	# Repeat underlay-triggered protodown while traffic remains active. This
+	# catches stale LACP state and NHGs that recover once but not repeatedly.
+	for cycle in $(seq 1 "$stress_cycles"); do
+		ip -n "$fabric" link set x-u1 down
+		wait_until "stress cycle $cycle PE1 carrier protodown" \
+			grout_carrier_member_state "$tmp/grout1.sock" true false
+		wait_until "stress cycle $cycle PE1 LACP withdrawal" \
+			carrier_member_not_synced x-carrier1
+		wait_until "stress cycle $cycle single remote VTEP" \
+			nhg_only_vtep_is "$tmp/grout3.sock" "$nhg_id" 172.16.0.2
+		ip netns exec "${hosts[2]}" ping -c 1 -W 2 10.0.0.10 ||
+			fail "carrier traffic failed in protodown stress cycle $cycle"
+
+		ip -n "$fabric" link set x-u1 up
+		wait_evpn_peers "${nodes[0]}"
+		wait_until "stress cycle $cycle PE1 carrier recovery" \
+			grout_carrier_member_state "$tmp/grout1.sock" false true
+		wait_until "stress cycle $cycle PE1 LACP recovery" carrier_member_synced x-carrier1
+		wait_until "stress cycle $cycle two-member remote NHG" \
+			nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+	done
+
+	# Withdraw both all-active PEs to force removal of the remote FDB/NHG graph,
+	# then restore them together. This exercises delete/recreate ordering rather
+	# than only shrinking an existing two-member group.
+	ip -n "$fabric" link set x-u1 down
+	ip -n "$fabric" link set x-u2 down
+	wait_until "both carrier members protodown" \
+		grout_carrier_member_state "$tmp/grout1.sock" true false
+	wait_until "second carrier member protodown" \
+		grout_carrier_member_state "$tmp/grout2.sock" true false
+	wait_until "PE1 carrier LACP withdrawal" carrier_member_not_synced x-carrier1
+	wait_until "PE2 carrier LACP withdrawal" carrier_member_not_synced x-carrier2
+	wait_until "remote all-active MAC withdrawal" \
+		remote_fdb_lacks_mac "$tmp/grout3.sock" "$carrier_mac"
+	if ip netns exec "${hosts[2]}" ping -c 1 -W 1 10.0.0.10; then
+		fail "carrier remained reachable after both all-active PEs were withdrawn"
+	fi
+
+	ip -n "$fabric" link set x-u1 up
+	ip -n "$fabric" link set x-u2 up
+	for index in 1 2 3; do
+		wait_evpn_peers "${nodes[$((index - 1))]}"
+	done
+	wait_until "PE1 recovery after full withdrawal" \
+		grout_carrier_member_state "$tmp/grout1.sock" false true
+	wait_until "PE2 recovery after full withdrawal" \
+		grout_carrier_member_state "$tmp/grout2.sock" false true
+	wait_until "PE1 LACP recovery after full withdrawal" carrier_member_synced x-carrier1
+	wait_until "PE2 LACP recovery after full withdrawal" carrier_member_synced x-carrier2
+	wait_until "remote all-active MAC recreation" \
+		remote_fdb_has_nhg "$tmp/grout3.sock" "$carrier_mac"
+	nhg_id=$(grcli -s "$tmp/grout3.sock" -j fdb show | jq -r --arg mac "$carrier_mac" '
+		[.[] | select(.mac == $mac and .iface == "vxlan100" and .nhg != 0)][0].nhg // 0
+	')
+	[ "$nhg_id" -ne 0 ] || fail "remote MAC recreation did not reference an NHG"
+	wait_until "recreated two-member remote NHG" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after full all-active withdrawal and recreation"
+
+	echo "PASS: EVPN-MH survived repeated and complete all-active withdrawal"
+
+	# Persist and restart the complete FRR stack on the remote VM host while
+	# Grout keeps forwarding state. The provider must reconnect, replay the
+	# interface/VNI state and converge on the same two-member L2 NHG.
+	local restart_node="${nodes[2]}"
+	local restart_log="$tmp/$restart_node.log"
+	local restart_line
+
+	vtysh -N "$restart_node" -c 'write memory' >/dev/null ||
+		fail "could not persist remote PE configuration before restart"
+	restart_line=$(( $(wc -l < "$restart_log") + 1 ))
+	frrinit.sh stop "$restart_node" >/dev/null
+	GROUT_SOCK_PATH="$tmp/grout3.sock" frrinit.sh start "$restart_node" >/dev/null
+	wait_until "remote PE Grout provider resubscription" \
+		frr_subscription_after_line "$restart_log" "$restart_line"
+	wait_evpn_peers "$restart_node"
+	wait_until "remote MAC NHG after FRR stack restart" \
+		remote_fdb_has_nhg "$tmp/grout3.sock" "$carrier_mac"
+	nhg_id=$(grcli -s "$tmp/grout3.sock" -j fdb show | jq -r --arg mac "$carrier_mac" '
+		[.[] | select(.mac == $mac and .iface == "vxlan100" and .nhg != 0)][0].nhg // 0
+	')
+	[ "$nhg_id" -ne 0 ] || fail "FRR restart left the remote MAC without an NHG"
+	wait_until "two-member remote NHG after FRR stack restart" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after remote FRR stack restart"
+
+	echo "PASS: remote FRR stack restart reconciled the EVPN-MH dataplane"
+
+	# Repeat on a carrier-facing PE so that ES configuration, bridge-port policy,
+	# uplink tracking and the remote MAC path all have to reconcile together.
+	restart_node="${nodes[0]}"
+	restart_log="$tmp/$restart_node.log"
+	vtysh -N "$restart_node" -c 'write memory' >/dev/null ||
+		fail "could not persist carrier PE configuration before restart"
+	restart_line=$(( $(wc -l < "$restart_log") + 1 ))
+	frrinit.sh stop "$restart_node" >/dev/null
+	GROUT_SOCK_PATH="$tmp/grout1.sock" frrinit.sh start "$restart_node" >/dev/null
+	wait_until "carrier PE Grout provider resubscription" \
+		frr_subscription_after_line "$restart_log" "$restart_line"
+	wait_evpn_peers "$restart_node"
+	wait_until "carrier PE bridge policy after FRR stack restart" \
+		bridge_port_policy_is "$tmp/grout1.sock" true 172.16.0.2
+	wait_until "carrier PE LACP state after FRR stack restart" \
+		grout_carrier_member_state "$tmp/grout1.sock" false true
+	wait_until "remote two-member NHG after carrier PE restart" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after carrier-facing FRR stack restart"
+
+	echo "PASS: carrier-facing FRR restart replayed EVPN-MH policy and forwarding state"
 }
 trap cleanup EXIT
 
@@ -604,11 +733,12 @@ start_grout() {
 	local node="${nodes[$((index - 1))]}"
 	local sock="$tmp/grout$index.sock"
 	local log="$tmp/grout$index.log"
-	local memory=1024
+	local memory="${EVPN_MH_GROUT_MEMORY:-768}"
+	local cpuset="${EVPN_MH_GROUT_CPUSET:-0,1}"
 
 	ip netns add "$node"
 	ip -n "$node" link set lo up
-	ip netns exec "$node" env GROUT_SOCK_PATH="$sock" \
+	taskset -c "$cpuset" ip netns exec "$node" env GROUT_SOCK_PATH="$sock" \
 		grout -t -M "unix:$tmp/metrics$index.sock" -- \
 		--file-prefix="$prefix-$index" -m "$memory" >"$log" 2>&1 &
 	grout_pids+=("$!")

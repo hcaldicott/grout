@@ -32,6 +32,9 @@ static void bond_show(struct gr_api_client *c, const struct gr_iface *iface, str
 		gr_object_open(o, NULL);
 		gr_object_field(o, "name", 0, "%s", member->name);
 		gr_object_field(o, "active", GR_DISP_BOOL, "%s", m->active ? "true" : "false");
+		gr_object_field(
+			o, "protodown", GR_DISP_BOOL, "%s", m->protodown ? "true" : "false"
+		);
 		if (bond->mode == GR_BOND_MODE_ACTIVE_BACKUP && i == bond->primary_member)
 			gr_object_field(o, "primary", GR_DISP_BOOL, "true");
 		if (member->type == GR_IFACE_TYPE_PORT) {
@@ -229,6 +232,25 @@ out:
 	return ret;
 }
 
+static cmd_status_t bond_member_set(struct gr_api_client *c, const struct ec_pnode *p) {
+	struct gr_bond_member_set_req req = {0};
+	const char *state;
+
+	if (arg_iface(c, p, "NAME", GR_IFACE_TYPE_BOND, &req.bond_iface_id) < 0
+	    || arg_iface(c, p, "MEMBER", GR_IFACE_TYPE_PORT, &req.member_iface_id) < 0)
+		return CMD_ERROR;
+
+	state = arg_str(p, "PROTODOWN");
+	if (state == NULL)
+		return CMD_ERROR;
+	req.protodown = strcmp(state, "on") == 0;
+
+	if (gr_api_client_send_recv(c, GR_BOND_MEMBER_SET, sizeof(req), &req, NULL) < 0)
+		return CMD_ERROR;
+
+	return CMD_SUCCESS;
+}
+
 #define BOND_ATTRS_CMD IFACE_ATTRS_CMD ",(balance ALGO),(mac MAC)"
 #define BOND_ATTRS_ARGS                                                                            \
 	IFACE_ATTRS_ARGS,                                                                          \
@@ -286,6 +308,26 @@ static int ctx_init(struct ec_node *root) {
 			ec_node_dyn("PRIMARY", complete_iface_names, INT2PTR(GR_IFACE_TYPE_PORT))
 		),
 		BOND_ATTRS_ARGS
+	);
+	if (ret < 0)
+		return ret;
+	ret = CLI_COMMAND(
+		INTERFACE_SET_CTX(root),
+		"bond NAME member MEMBER protodown PROTODOWN",
+		bond_member_set,
+		"Suppress or reinstate ordinary traffic on an LACP member.",
+		with_help(
+			"Bond interface name.",
+			ec_node_dyn("NAME", complete_iface_names, INT2PTR(GR_IFACE_TYPE_BOND))
+		),
+		with_help(
+			"Member port name.",
+			ec_node_dyn("MEMBER", complete_iface_names, INT2PTR(GR_IFACE_TYPE_PORT))
+		),
+		with_help(
+			"Protocol-down state.",
+			EC_NODE_OR("PROTODOWN", ec_node_str("", "on"), ec_node_str("", "off"))
+		)
 	);
 	if (ret < 0)
 		return ret;

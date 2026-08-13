@@ -1326,8 +1326,8 @@ live migration.
 | Local-bias redirect | Prototype pass | ES hairpin redirects through backup NHG. |
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
-| Bridge-port ordering | Unit pass | Desired policy is retained before bridge readiness, activated after interface add/reconfiguration, deactivated while detached and cleared on removal. Physical restart coverage remains required. |
-| Zebra phased restart | Harness gap | Retained state exists, but dependency restart/replay is not a gating test. |
+| Bridge-port ordering | Unit and restart pass | Desired policy is retained before bridge readiness and replayed after a carrier-facing full FRR stack restart. |
+| FRR stack restart | Prototype pass | Remote and carrier-facing stop/start recover provider subscription, EVPN peers, NHG/policy state and traffic. Zebra-only phased restart storms remain. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |
 | Any-host 20 Gb/s | Not proven | Remote-host path distribution passes; local-bias case remains. |

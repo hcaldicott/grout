@@ -119,6 +119,8 @@ enum gr_l2_requests : uint32_t {
 	GR_FLOOD_ADD,
 	GR_FLOOD_DEL,
 	GR_FLOOD_LIST,
+	GR_BRIDGE_PORT_SET,
+	GR_BRIDGE_PORT_GET,
 };
 
 // Add an FDB entry. The bridge_id is resolved from the member interface's domain.
@@ -222,6 +224,36 @@ struct gr_flood_list_req {
 };
 
 GR_REQ_STREAM(GR_FLOOD_LIST, struct gr_flood_list_req, struct gr_flood_entry);
+
+// EVPN multihoming bridge-port policy ////////////////////////////////////////
+
+#define GR_BRIDGE_PORT_MAX_SPH_FILTERS 10
+
+typedef enum : uint8_t {
+	GR_BRIDGE_PORT_F_NON_DF = GR_BIT8(0),
+} gr_bridge_port_flags_t;
+
+// Policy applied to overlay traffic forwarded toward a local bridge member.
+// The entire object is replaced atomically by GR_BRIDGE_PORT_SET.
+struct gr_bridge_port_policy {
+	uint16_t iface_id;
+	gr_bridge_port_flags_t flags;
+	uint8_t n_sph_filters;
+	uint32_t backup_nhg_id;
+	struct l3_addr sph_filters[GR_BRIDGE_PORT_MAX_SPH_FILTERS];
+};
+
+struct gr_bridge_port_set_req {
+	struct gr_bridge_port_policy policy;
+};
+
+GR_REQ(GR_BRIDGE_PORT_SET, struct gr_bridge_port_set_req, struct gr_empty);
+
+struct gr_bridge_port_get_req {
+	uint16_t iface_id;
+};
+
+GR_REQ(GR_BRIDGE_PORT_GET, struct gr_bridge_port_get_req, struct gr_bridge_port_policy);
 
 // events //////////////////////////////////////////////////////////////////////
 

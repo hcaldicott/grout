@@ -34,9 +34,9 @@ This backlog complements:
 
 | ID | Gap | Priority | Status | Production impact |
 | --- | --- | --- | --- | --- |
-| HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Open | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
-| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype | Control-plane reordering or provider failures may expose untested convergence behavior. |
-| RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype | Daemon restart is not yet a gating, repeatable test. |
+| HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Deferred for architecture | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
+| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with direct smoke coverage | Core ordering and type invariants pass; FRR provider failure injection remains. |
+| RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype with stack-restart coverage | Remote and carrier-facing FRR stack replay passes; daemon-specific restart storms remain. |
 | FRR-001 | Upstream FRR dataplane abstraction changes | P0 | Prototype | The project carries an FRR 10.6.1 fork and rebase burden. |
 | MIG-001 | Migration-compatible VM attachment | P0 | Open | Seamless migration cannot be claimed until vhost-user reconnect and switchover are validated. |
 | VLAN-001 | General bridge-domain/VLAN representation | P1 | Constrained | The current single synthetic VLAN is safe but cannot represent general tagged services. |
@@ -49,9 +49,17 @@ This backlog complements:
 
 ### HASH-001: separate Grout flow identity from hardware RSS metadata
 
-**Status:** Open  
-**Priority:** P0  
+**Status:** Deferred for architecture review
+
+**Priority:** P0
+
 **Origin:** EVPN-MH implementation review
+
+The project has deliberately retained the current software-RSS shim while its
+packet-metadata architecture is reviewed with upstream maintainers and other
+dataplane engineers. Until that decision is made, new code must not broaden
+the shim beyond its existing EVPN-MH path or treat it as a general Grout API.
+The existing forwarding behavior and regression coverage remain in place.
 
 #### Problem
 
@@ -149,7 +157,8 @@ explicit DPDK-compliant producer.
 
 ### META-001: audit existing direct RSS consumers
 
-**Status:** Open  
+**Status:** Open
+
 **Priority:** P1
 
 Search all direct reads of `m->hash.rss` and classify them as:
@@ -168,7 +177,8 @@ narrow EVPN-MH patch if that makes upstream review easier.
 
 ### VLAN-001: replace the single synthetic VLAN constraint
 
-**Status:** Constrained  
+**Status:** Constrained
+
 **Priority:** P1 for the current untagged product; P0 if tagged carrier
 services enter scope
 
@@ -207,7 +217,8 @@ per-VLAN bridging.
 
 ### LIFE-001: adversarial L2 NH/NHG lifecycle coverage
 
-**Status:** Prototype  
+**Status:** Prototype
+
 **Priority:** P0
 
 The reported mixed L2/L3 group vulnerability is fixed: Grout rejects nested or
@@ -225,6 +236,14 @@ What remains is failure-oriented coverage of the full FRR-to-Grout lifecycle:
 - repeated remote VTEP withdrawal and restoration;
 - concurrent FDB replacement and NHG replacement.
 
+The direct Grout smoke test now covers missing members, two-member L2 group
+creation, forced first/last member deletion, preservation of the empty group's
+L2 forwarding class, rejection of L3 repopulation, L2 repopulation, nested
+group rejection, group-before-member deletion and clean ID reuse. The
+three-node test additionally removes both all-active PEs until the remote FDB
+entry disappears, restores them and verifies recreation of a two-member NHG
+under live traffic.
+
 #### Acceptance tests
 
 - Invalid or incomplete state fails closed without a stale pointer or crash.
@@ -238,7 +257,8 @@ What remains is failure-oriented coverage of the full FRR-to-Grout lifecycle:
 
 ### FRR-001: upstream the non-kernel EVPN-MH dataplane path
 
-**Status:** Prototype  
+**Status:** Prototype
+
 **Priority:** P0
 
 The FRR 10.6.1 patches fix a genuine abstraction problem: EVPN-MH L2
@@ -275,7 +295,8 @@ upstream and remain a high-maintenance fork surface.
 
 ### RESTART-001: make daemon restart a gating scenario
 
-**Status:** Prototype/harness gap  
+**Status:** Prototype/harness gap
+
 **Priority:** P0
 
 Bridge-port policy arriving before interface bridge readiness is now handled:
@@ -286,6 +307,12 @@ ordering behavior.
 The remaining gap is end-to-end restart and replay behavior. The current
 namespace-local FRR launcher cannot reliably reproduce WatchFRR's phased
 dependency restart and integrated configuration replay.
+
+The three-node harness now persists and fully restarts FRR on both the remote
+VM-facing PE and a carrier-facing PE. It verifies provider resubscription, BGP
+EVPN peer recovery, remote L2 NHG state, carrier bridge-port policy, LACP state
+and end-to-end reachability. This closes full-stack stop/start coverage, but
+does not yet replace the daemon-specific and restart-storm work below.
 
 #### Remaining work
 
@@ -312,12 +339,18 @@ dependency restart and integrated configuration replay.
 
 ### PROTO-001: harden protodown and split-chassis LACP behavior
 
-**Status:** Prototype  
+**Status:** Prototype
+
 **Priority:** P1
 
 The prototype keeps LACP control traffic alive while suppressing ordinary
 traffic on a protodown member. The three-node lab verifies withdrawal and
 recovery, but repeated and compound failure behavior remains unqualified.
+
+The focused LACP test now performs three additional protodown/recovery cycles
+by default. The three-node test performs repeated uplink-triggered withdrawals
+and a complete two-PE withdrawal/recreation while checking the surviving path
+and remote NHG state. Longer stress runs and physical-carrier coverage remain.
 
 #### Remaining work
 
@@ -335,7 +368,8 @@ recovery, but repeated and compound failure behavior remains unqualified.
 
 ### MIG-001: implement and qualify vhost-user attachment
 
-**Status:** Open  
+**Status:** Open
+
 **Priority:** P0 for the product objective
 
 SR-IOV passthrough cannot provide ordinary seamless live migration because the
@@ -373,7 +407,8 @@ carrier and fabric ports remain under Grout/DPDK control.
 
 ### PERF-001: qualify the real SE350/X710 datapath
 
-**Status:** Blocked by physical lab  
+**Status:** Blocked by physical lab
+
 **Priority:** P0 before release
 
 Docker namespaces establish functional correctness only. They cannot prove
@@ -394,7 +429,8 @@ Required qualification includes:
 
 ### OPER-001: OpenNebula and AlmaLinux operational integration
 
-**Status:** Open  
+**Status:** Open
+
 **Priority:** P1
 
 Remaining product work includes reproducible packages, configuration schema,
@@ -421,19 +457,19 @@ The following findings are closed and should remain regression-tested:
 
 ## Recommended implementation order
 
-1. **HASH-001** — remove forged RSS metadata before extending datapath usage.
-2. **LIFE-001** — make L2 NH/NHG failure and ordering behavior deterministic.
-3. **FRR-001** — add upstream-quality tests and reduce the fork surface.
-4. **RESTART-001** — make reconciliation a repeatable gating test.
-5. **PROTO-001** — stress LACP/protodown under compound failures.
-6. **MIG-001** — implement vhost-user lifecycle and simulated migration.
-7. **VLAN-001** — retain the explicit constraint or generalize based on the
+1. **LIFE-001** — make L2 NH/NHG failure and ordering behavior deterministic.
+2. **FRR-001** — add upstream-quality tests and reduce the fork surface.
+3. **RESTART-001** — make reconciliation a repeatable gating test.
+4. **PROTO-001** — stress LACP/protodown under compound failures.
+5. **MIG-001** — implement vhost-user lifecycle and simulated migration.
+6. **VLAN-001** — retain the explicit constraint or generalize based on the
    carrier service model.
-8. **PERF-001 / OPER-001** — qualify physical hardware and integrate with
+7. **PERF-001 / OPER-001** — qualify physical hardware and integrate with
    OpenNebula for production rollout.
 
-META-001 should begin with HASH-001 and continue opportunistically without
-expanding the first canonical-hash patch beyond a reviewable scope.
+HASH-001 and implementation changes arising from META-001 remain deferred
+pending architectural review. A read-only consumer audit may continue, but it
+must not expand or normalize the current software-RSS shim.
 
 ## Definition of production-ready
 

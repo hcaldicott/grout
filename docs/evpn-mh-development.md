@@ -39,10 +39,11 @@ dataplane development; it does not represent physical NIC performance.
 | IPv4 fragment affinity | Pass | DF-only packets use L4 ports; first and later fragments share the L3-only hash. |
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
 | DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
-| Bridge-port ordering | Unit pass | Policy can arrive before bridge readiness, becomes active on interface reconciliation and is safely deactivated/replayed across mode changes. Restart smoke coverage remains outstanding. |
+| L2 NH/NHG lifecycle | Smoke pass | Missing dependencies fail closed; forced member deletion preserves a typed group; nested/class-changing updates are rejected; delete/recreate and ID reuse complete cleanly. |
+| Bridge-port ordering | Unit and restart pass | Policy can arrive before bridge readiness, becomes active on interface reconciliation and is replayed after a carrier-facing FRR stack restart. |
 | Uplink tracking/protodown | Prototype pass | FRR `DPLANE_OP_INTF_UPDATE` drives explicit Grout LACP-member protodown. Ordinary ingress and egress are suppressed, LACP remains live, remote NHGs withdraw, and both the carrier member and NHG recover in the three-node lab. |
 | Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
-| Zebra restart | Harness gap | Grout retains forwarding state when Zebra exits, but the namespace-local FRR launcher cannot yet perform WatchFRR's phased dependency restart and integrated-config replay reliably. A dedicated restart wrapper is required before this becomes a gating smoke test. |
+| FRR stack restart | Prototype pass | Full stop/start on both the remote VM PE and a carrier-facing PE resubscribes the provider, restores EVPN peers, L2 NHG state, bridge policy and carrier reachability. Zebra-only graceful-restart/failure-result coverage remains. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
 FRR 10.6.1 already calculates the EVPN-MH control-plane state. The bundled
@@ -139,7 +140,8 @@ Acceptance criteria:
 
 ### 4. Enforce DF state and split horizon
 
-Status: prototype tested; delete ordering and restart coverage remain.
+Status: prototype tested; direct lifecycle smoke coverage passes, while provider
+failure-result injection and longer repeated stress remain.
 
 Implement `DPLANE_OP_BR_PORT_UPDATE` in the Grout FRR provider and corresponding
 Grout APIs. Apply non-DF filtering for BUM traffic, the backup NHG reference and
@@ -165,7 +167,8 @@ Acceptance criteria:
 
 ### 5. Uplink tracking and failure convergence
 
-Status: prototype tested; daemon restart and repeated-stress coverage remain.
+Status: prototype tested; repeated protodown and full FRR-stack restart coverage
+pass, while daemon-specific restart storms and physical-carrier stress remain.
 
 Implement the interface-state part of `DPLANE_OP_INTF_UPDATE` needed by FRR
 EVPN-MH. Map protodown and uplink state to Grout bond forwarding state without
@@ -265,18 +268,19 @@ qualification.
 
 ## Immediate work queue
 
-1. Replace the EVPN-MH software-RSS shim with the Grout-owned canonical flow
-   hash described by HASH-001 in `docs/evpn-mh-remaining-gaps.md`.
-2. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
-   allocation beyond the current fail-closed single synthetic VLAN.
-3. Add FRR failure-injection tests for the working L2 NH/NHG dataplane
-   representation and prepare it for upstream review.
-4. Extend the passing live NHG replacement smoke coverage with L2 create and
+1. Extend the passing live NHG replacement smoke coverage with L2 create and
    deletion-order failure injection.
-5. Add bridge-port restart and delete-ordering smoke tests, then prepare the API
+2. Add FRR failure-injection tests for the working L2 NH/NHG dataplane
+   representation and prepare it for upstream review.
+3. Add bridge-port restart and delete-ordering smoke tests, then prepare the API
    and dataplane changes for upstream review.
-6. Harden the protodown prototype with repeated failure loops and provider/API
+4. Harden the protodown prototype with repeated failure loops and provider/API
    unit coverage suitable for upstream review.
-7. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
+5. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
    through carrier-link, underlay and daemon restart cases before beginning the
    VM migration phase.
+6. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
+   allocation beyond the current fail-closed single synthetic VLAN.
+
+HASH-001 is intentionally deferred for architectural review. Do not expand the
+current software-RSS shim while the remaining lifecycle work proceeds.

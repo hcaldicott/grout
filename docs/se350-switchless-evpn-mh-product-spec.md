@@ -8,7 +8,7 @@
 | Document version | 0.1 |
 | Last updated | 2026-08-13 |
 | Product repository | `https://github.com/hcaldicott/grout` |
-| Development branch | `evpn-mh-lifecycle` |
+| Development branch | `evpn-mh-protodown` |
 | Engineering baseline before this document | `b2c6f24b` (`smoke: cover EVPN-MH MAC reconciliation`) |
 | Upstream repository | `https://github.com/DPDK/grout` |
 | Upstream baseline | `cd71aea5` |
@@ -63,12 +63,14 @@ FRR already supports all-active Layer-2 EVPN multihoming through LACP Ethernet
 Segments. The development branch has demonstrated that FRR can drive a Grout
 DPDK dataplane after a limited set of FRR and Grout extensions. The current
 three-node lab passes control-plane signalling, split-chassis LACP, remote MAC
-ECMP, DF changes, BUM suppression, split horizon, local-bias redirection, member
-withdrawal/recovery and pre-Ethernet-Segment MAC reconciliation.
+ECMP, DF changes, BUM suppression, split horizon, local-bias redirection,
+FRR-driven protodown, carrier and fabric failure/recovery, and
+pre-Ethernet-Segment MAC reconciliation.
 
 This is not yet production-ready. In particular:
 
-1. FRR-to-Grout interface protodown/uplink tracking is missing.
+1. FRR-to-Grout interface protodown/uplink tracking is a tested prototype but
+   still needs restart, stress and physical-carrier qualification.
 2. Restart, delete ordering and nexthop lifecycle require hardening tests.
 3. Grout's generic DPDK vhost PMD is compiled in, but the VM attachment,
    reconnect and live-migration lifecycle is not implemented or tested.
@@ -651,7 +653,8 @@ a partially updated object. The datapath:
 
 ### 8.4 Uplink tracking and protodown
 
-This behavior is still missing and is release-blocking.
+This behavior is implemented and functionally tested as a prototype. Restart,
+stress and physical-carrier qualification remain release-blocking.
 
 If a PE loses safe fabric reachability but its carrier optic remains up, the
 carrier must stop sending ordinary data to that isolated PE. Simply dropping
@@ -668,8 +671,10 @@ The required Grout member-suppression state MUST:
 5. keep link state and the LACP state machine observable;
 6. restore normal negotiation when FRR clears protodown.
 
-FRR's relevant `DPLANE_OP_INTF_UPDATE` context must map to this explicit API,
-not to the ordinary `GR_IFACE_F_UP` flag.
+FRR's relevant `DPLANE_OP_INTF_UPDATE` context maps to the explicit
+`GR_BOND_MEMBER_SET` API, not to the ordinary `GR_IFACE_F_UP` flag. The member
+state is visible through `grcli`, the interface `protodown` flag and the
+`iface_protodown` metric.
 
 ---
 
@@ -1181,28 +1186,36 @@ need the change.
 
 ### 13.7 Interface protodown API
 
-Add a Grout API that targets an individual LACP member and separates:
+The prototype adds a Grout API that targets an individual LACP member and
+separates:
 
 - physical/admin link state;
 - LACP protocol participation;
 - data collecting;
 - data distributing;
-- operator/FRR suppression reason.
+- binary operator/FRR suppression state.
 
-Suggested public shape, subject to API review:
+The public prototype shape remains subject to API review:
 
 ```c
-struct gr_bond_member_state_set_req {
+struct gr_bond_member_set_req {
     uint16_t bond_iface_id;
     uint16_t member_iface_id;
     bool protodown;
-    uint32_t reason;
 };
 ```
 
-The internal bond active-member table must be replaced atomically. Ingress
-classification must still divert LACP slow-protocol frames to the LACP control
-node while rejecting ordinary data on a suppressed member.
+The current implementation rebuilds the existing bond redirection table when
+state changes. Ingress classification leaves suppressed traffic associated
+with the physical member, permits LACP slow-protocol frames to reach the LACP
+control node and rejects ordinary data. The test suite verifies that egress
+reaches the fail-closed no-member edge while suppressed and selects the member
+again only after LACP recovery.
+
+The prototype has one Boolean suppression writer state. If production tooling
+will set an independent operator hold while FRR also owns uplink tracking, the
+API MUST be extended to aggregate source/reason bits so one writer cannot clear
+another writer's hold.
 
 ### 13.8 Vhost-user lifecycle support
 
@@ -1261,8 +1274,9 @@ The work is split into reviewable development branches:
 | `alma9-evpn-mh-poc` / `2df91f66` | AlmaLinux lab, FRR L2 dplane patch, L2 VTEP/NHG, MAC ECMP, initial plan |
 | `evpn-mh-df-split-horizon` / `8c6ec7cd` | Bridge-port policy, DF/BUM enforcement, split horizon, local bias |
 | `evpn-mh-lifecycle` / `b2c6f24b` | Pre-ES MAC reconciliation and lifecycle smoke coverage |
+| `evpn-mh-protodown` | LACP-member protodown API, FRR uplink tracking, carrier/fabric failure convergence |
 
-The active branch is published at `origin/evpn-mh-lifecycle`.
+The active development branch is `evpn-mh-protodown`.
 
 ### 14.2 Lab topology
 
@@ -1300,7 +1314,7 @@ live migration.
 | Split horizon | Prototype pass | Injected peer-VTEP traffic is suppressed toward ES. |
 | Local-bias redirect | Prototype pass | ES hairpin redirects through backup NHG. |
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
-| Uplink/protodown | Missing | Provider does not implement the required interface update behavior. |
+| Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
 | Zebra phased restart | Harness gap | Retained state exists, but dependency restart/replay is not a gating test. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |
@@ -1355,6 +1369,10 @@ Exit criteria:
 - current three-node smoke test remains green.
 
 ### Tranche B: implement safe protodown and failure convergence
+
+Status: functional prototype passes the direct split-LACP and three-node
+fabric/carrier failure tests; restart, repeated-stress and upstream-quality unit
+coverage remain.
 
 Deliverables:
 
@@ -1778,7 +1796,7 @@ or deliberately imported.
 ### 21.1 Establish the repository state
 
 1. Work in the `hcaldicott/grout` fork.
-2. Check out `evpn-mh-lifecycle` at or after `b2c6f24b`.
+2. Check out `evpn-mh-protodown` at or after its Tranche B commits.
 3. Do not remove or overwrite the workspace's unrelated untracked `tmp/`
    directory.
 4. Review `docs/evpn-mh-development.md` and this specification before editing.
@@ -1797,20 +1815,11 @@ candidates on `linux/amd64` before physical SE350 testing.
 
 ### 21.3 Recommended immediate next task
 
-The next bounded implementation task is Tranche B's protodown API because it is
-well-scoped, release-blocking and independent of the final VM termination
-choice. In parallel at the architecture level, settle Tranche D before building
-the complete OpenNebula contract.
-
-Suggested protodown test-first sequence:
-
-1. add a unit-testable bond member suppression state;
-2. prove normal frames are excluded from ingress and egress;
-3. prove LACP frames still pass;
-4. prove the member leaves and rejoins the active redirection table;
-5. expose state through API/CLI;
-6. map the FRR interface update;
-7. add three-node fabric-isolation and recovery smoke cases.
+Tranche B's functional path is now prototyped. The next bounded task is to
+harden it with repeated failure loops, focused provider/API unit coverage and
+the namespace-aware phased FRR restart wrapper described in Tranche C. In
+parallel at the architecture level, settle Tranche D before building the
+complete OpenNebula contract.
 
 ### 21.4 Review discipline
 

@@ -413,6 +413,48 @@ out:
 	return ret;
 }
 
+static cmd_status_t nh_l2_add(struct gr_api_client *c, const struct ec_pnode *p) {
+	struct gr_nh_add_req *req = NULL;
+	struct gr_nexthop_info_l2 *l2;
+	cmd_status_t ret = CMD_ERROR;
+	size_t len = sizeof(*req) + sizeof(*l2);
+
+	req = calloc(1, len);
+	if (req == NULL)
+		goto out;
+
+	req->exist_ok = true;
+	req->nh.type = GR_NH_T_L2;
+	req->nh.origin = GR_NH_ORIGIN_STATIC;
+	req->nh.iface_id = GR_IFACE_ID_UNDEF;
+	if (arg_u32(p, "ID", &req->nh.nh_id) < 0)
+		goto out;
+	if (arg_vrf(c, p, "VRF", &req->nh.vrf_id) < 0)
+		goto out;
+
+	l2 = (struct gr_nexthop_info_l2 *)req->nh.info;
+	switch (arg_ip4(p, "VTEP", &l2->vtep.ipv4)) {
+	case 0:
+		l2->vtep.af = GR_AF_IP4;
+		break;
+	case -EINVAL:
+		if (arg_ip6(p, "VTEP", &l2->vtep.ipv6) < 0)
+			goto out;
+		l2->vtep.af = GR_AF_IP6;
+		break;
+	default:
+		goto out;
+	}
+
+	if (gr_api_client_send_recv(c, GR_NH_ADD, len, req, NULL) < 0)
+		goto out;
+
+	ret = CMD_SUCCESS;
+out:
+	free(req);
+	return ret;
+}
+
 static cmd_status_t nh_blackhole_add(struct gr_api_client *c, const struct ec_pnode *p) {
 	struct gr_nh_add_req req = {
 		.exist_ok = true,
@@ -651,6 +693,17 @@ static int ctx_init(struct ec_node *root) {
 		with_help("Nexthop ID.", ec_node_uint("ID", 1, UINT32_MAX - 1, 10)),
 		with_help("Output interface.", ec_node_dyn("IFACE", complete_iface_names, NULL)),
 		with_help("Mark as remote (EVPN).", ec_node_str("remote", "remote"))
+	);
+	if (ret < 0)
+		return ret;
+	ret = CLI_COMMAND(
+		NEXTHOP_ADD_CTX(root),
+		"l2 vtep VTEP vrf VRF id ID",
+		nh_l2_add,
+		"Add an L2 remote-VTEP nexthop.",
+		with_help("Remote VXLAN tunnel endpoint.", ec_node_re("VTEP", IP_ANY_RE)),
+		with_help("L3 routing domain name.", ec_node_dyn("VRF", complete_vrf_names, NULL)),
+		with_help("Nexthop ID.", ec_node_uint("ID", 1, UINT32_MAX - 1, 10))
 	);
 	if (ret < 0)
 		return ret;

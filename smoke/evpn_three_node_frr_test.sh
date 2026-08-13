@@ -21,9 +21,11 @@ tmp=$(mktemp -d)
 chmod 0777 "$tmp"
 prefix="e3n-$$"
 fabric="$prefix-f"
+carrier="$prefix-carrier"
 hosts=("$prefix-h1" "$prefix-h2" "$prefix-h3")
 nodes=("$prefix-n1" "$prefix-n2" "$prefix-n3")
 grout_pids=()
+mh_enabled="${EVPN_MH_PROBE:-false}"
 
 wait_until() {
 	local description="$1"
@@ -60,6 +62,12 @@ cleanup() {
 	local status=$?
 	set +e
 
+	if [ "$status" -ne 0 ]; then
+		for index in 1 2 3; do
+			echo "=== Grout node $index log ===" >&2
+			tail -n 100 "$tmp/grout$index.log" >&2
+		done
+	fi
 	for node in "${nodes[@]}"; do
 		frrinit.sh stop "$node" >/dev/null 2>&1
 	done
@@ -69,11 +77,98 @@ cleanup() {
 	for pid in "${grout_pids[@]}"; do
 		wait "$pid" >/dev/null 2>&1
 	done
-	for ns in "${hosts[@]}" "${nodes[@]}" "$fabric"; do
+	for ns in "${hosts[@]}" "${nodes[@]}" "$carrier" "$fabric"; do
 		ip netns del "$ns" >/dev/null 2>&1
 	done
 	rm -rf "$tmp"
 	exit "$status"
+}
+
+carrier_member_synced() {
+	local details
+
+	details=$(ip -n "$carrier" -d link show "$1")
+	printf '%s\n' "$details" | grep -q 'ad_actor_oper_port_state 63' &&
+		printf '%s\n' "$details" | grep -q 'ad_partner_oper_port_state 63'
+}
+
+configure_mh_carrier() {
+	local system_mac=02:00:00:00:10:00
+	local esi=03:02:00:00:00:10:00:00:00:01
+
+	ip netns add "$carrier"
+	ip -n "$carrier" link set lo up
+	ip -n "$carrier" link add bond0 type bond mode 802.3ad \
+		lacp_active on lacp_rate fast xmit_hash_policy layer3+4
+
+	for index in 1 2; do
+		local node="${nodes[$((index - 1))]}"
+		local sock="$tmp/grout$index.sock"
+		local tap="x-carrier$index"
+
+		grcli -s "$sock" interface add bond carrier mode lacp \
+			mac "$system_mac" domain br100
+		grcli -s "$sock" interface add port carrier-port \
+			devargs "net_tap2,iface=$tap" domain carrier
+		ip -n "$node" link set "$tap" address "02:00:00:00:20:0$index"
+		ip -n "$node" link set "$tap" netns "$carrier"
+		ip -n "$carrier" link set "$tap" master bond0
+		ip -n "$carrier" link set "$tap" up
+
+		wait_until "node $index carrier interface in FRR" \
+			sh -c "vtysh -N '$node' -c 'show interface carrier' | grep -q 'Interface carrier'"
+		vtysh -N "$node" <<-EOF
+		configure terminal
+		evpn mh startup-delay 0
+		evpn mh redirect-off
+		interface underlay
+		 evpn mh uplink
+		exit
+		interface carrier
+		 evpn mh es-id 1
+		 evpn mh es-sys-mac $system_mac
+		exit
+		EOF
+	done
+
+	ip -n "$carrier" link set bond0 up
+	for index in 1 2; do
+		wait_until "carrier LACP member $index" \
+			carrier_member_synced "x-carrier$index"
+		wait_until "node $index local Ethernet Segment" \
+			sh -c "vtysh -N '${nodes[$((index - 1))]}' -c 'show evpn es' | grep -qi '$esi'"
+	done
+
+	sleep 2
+	for index in 1 2 3; do
+		echo "=== node $index EVPN Ethernet Segments ==="
+		vtysh -N "${nodes[$((index - 1))]}" -c 'show evpn es detail'
+		vtysh -N "${nodes[$((index - 1))]}" -c 'show evpn es-evi detail'
+	done
+	vtysh -N "${nodes[2]}" -c 'show bgp l2vpn evpn route type 1'
+	vtysh -N "${nodes[2]}" -c 'show bgp l2vpn evpn route type 4'
+
+	wait_until "remote type-1 Ethernet A-D route" \
+		sh -c "vtysh -N '${nodes[2]}' -c 'show bgp l2vpn evpn route type 1' | grep -qi '$esi'"
+	wait_until "remote type-4 Ethernet Segment route" \
+		sh -c "vtysh -N '${nodes[2]}' -c 'show bgp l2vpn evpn route type 4' | grep -qi '$esi'"
+
+	if [ "${EVPN_MH_DATA_PLANE:-false}" != true ]; then
+		echo "PASS: EVPN-MH control plane converged"
+		return
+	fi
+
+	ip -n "$carrier" address add 10.0.0.10/24 dev bond0
+
+	if ! ip netns exec "$carrier" ping -c 3 -W 2 10.0.0.4; then
+		echo "GAP: EVPN-MH control plane converged but carrier traffic failed" >&2
+		for index in 1 2 3; do
+			grcli -s "$tmp/grout$index.sock" fdb show
+		done
+		return 2
+	fi
+
+	echo "PASS: EVPN-MH carrier traffic reached the remote host"
 }
 trap cleanup EXIT
 
@@ -93,14 +188,17 @@ start_grout() {
 	local node="${nodes[$((index - 1))]}"
 	local sock="$tmp/grout$index.sock"
 	local log="$tmp/grout$index.log"
+	local memory=1024
 
 	ip netns add "$node"
 	ip -n "$node" link set lo up
 	ip netns exec "$node" env GROUT_SOCK_PATH="$sock" \
 		grout -t -M "unix:$tmp/metrics$index.sock" -- \
-		--file-prefix="$prefix-$index" >"$log" 2>&1 &
+		--file-prefix="$prefix-$index" -m "$memory" >"$log" 2>&1 &
 	grout_pids+=("$!")
 	wait_until "Grout node $index API socket" test -S "$sock"
+	grcli -s "$sock" nexthop config set max 128
+	grcli -s "$sock" route config set default rib4-routes 128 rib6-routes 128
 }
 
 start_frr() {
@@ -259,6 +357,10 @@ done
 for node in "${nodes[@]}"; do
 	wait_evpn_peers "$node"
 done
+
+if [ "$mh_enabled" = true ]; then
+	configure_mh_carrier
+fi
 
 ip netns exec "${hosts[0]}" ping -c 3 -W 2 10.0.0.4
 ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.2

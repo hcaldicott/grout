@@ -10,6 +10,7 @@ src += files(
   'group_nexthop.c',
   'iface.c',
   'l3_nexthop.c',
+  'l2_nexthop.c',
   'lacp.c',
   'loopback.c',
   'mempool.c',

@@ -132,6 +132,7 @@ void fdb_learn(
 		fdb->flags = GR_FDB_F_LEARN;
 		fdb->iface_id = iface_id;
 		fdb->vtep = *vtep;
+		fdb->nhg_id = 0;
 
 		if (rte_hash_add_key_data(fdb_hash, &key, fdb) < 0) {
 			// no space left in hash

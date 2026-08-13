@@ -37,6 +37,7 @@ typedef enum : uint8_t {
 	GR_NH_T_BLACKHOLE, // Drop packets silently.
 	GR_NH_T_REJECT, // Drop packets with ICMP error.
 	GR_NH_T_GROUP, // ECMP for multipath routing.
+	GR_NH_T_L2, // Remote VTEP used by an L2 ECMP group.
 #define GR_NH_T_ALL UINT8_C(0xff) // Match all types in list operations.
 } gr_nh_type_t;
 
@@ -113,6 +114,11 @@ struct gr_nexthop_group_member {
 struct gr_nexthop_info_group {
 	uint32_t n_members;
 	struct gr_nexthop_group_member members[];
+};
+
+// Info for GR_NH_T_L2 nexthops.
+struct gr_nexthop_info_l2 {
+	struct l3_addr vtep;
 };
 
 // Nexthop structure exposed to the API.
@@ -196,6 +202,8 @@ static inline const char *gr_nh_type_name(const gr_nh_type_t type) {
 		return "reject";
 	case GR_NH_T_GROUP:
 		return "group";
+	case GR_NH_T_L2:
+		return "L2";
 	}
 	return "?";
 }

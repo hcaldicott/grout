@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 static _Atomic(struct gr_bridge_port_policy *) *policies;
+static struct gr_bridge_port_policy **desired_policies;
 
 const struct gr_bridge_port_policy *bridge_port_policy_get(uint16_t iface_id) {
 	if (iface_id >= gr_config.max_ifaces)
@@ -26,37 +27,13 @@ const struct gr_bridge_port_policy *bridge_port_policy_get(uint16_t iface_id) {
 	return atomic_load_explicit(&policies[iface_id], memory_order_acquire);
 }
 
-static int bridge_port_policy_replace(const struct gr_bridge_port_policy *policy) {
-	struct gr_bridge_port_policy *next, *old;
-
-	next = rte_zmalloc(__func__, sizeof(*next), RTE_CACHE_LINE_SIZE);
-	if (next == NULL)
-		return errno_set(ENOMEM);
-
-	*next = *policy;
-	old = atomic_exchange_explicit(&policies[policy->iface_id], next, memory_order_acq_rel);
-	rte_rcu_qsbr_synchronize(gr_datapath_rcu(), RTE_QSBR_THRID_INVALID);
-	rte_free(old);
-
-	return 0;
-}
-
 static int bridge_port_policy_validate(const struct gr_bridge_port_policy *policy) {
-	const struct iface *iface;
-
 	if (policy->iface_id >= gr_config.max_ifaces)
 		return errno_set(EINVAL);
 	if (policy->flags & ~GR_BRIDGE_PORT_F_NON_DF)
 		return errno_set(EINVAL);
 	if (policy->n_sph_filters > GR_BRIDGE_PORT_MAX_SPH_FILTERS)
 		return errno_set(E2BIG);
-
-	iface = iface_from_id(policy->iface_id);
-	if (iface == NULL)
-		return errno_set(ENODEV);
-	if (iface->mode != GR_IFACE_MODE_BRIDGE || iface->type == GR_IFACE_TYPE_VXLAN
-	    || iface->type == GR_IFACE_TYPE_BRIDGE)
-		return errno_set(EMEDIUMTYPE);
 
 	for (uint8_t i = 0; i < policy->n_sph_filters; i++) {
 		if (policy->sph_filters[i].af != GR_AF_IP4
@@ -67,6 +44,48 @@ static int bridge_port_policy_validate(const struct gr_bridge_port_policy *polic
 				return errno_set(EEXIST);
 	}
 
+	return 0;
+}
+
+static bool bridge_port_iface_ready(uint16_t iface_id) {
+	const struct iface *iface = iface_from_id(iface_id);
+
+	return iface != NULL && iface->mode == GR_IFACE_MODE_BRIDGE
+		&& iface->type != GR_IFACE_TYPE_VXLAN && iface->type != GR_IFACE_TYPE_BRIDGE;
+}
+
+static void bridge_port_policy_reconcile(uint16_t iface_id) {
+	struct gr_bridge_port_policy *next, *old;
+
+	if (iface_id >= gr_config.max_ifaces)
+		return;
+	next = bridge_port_iface_ready(iface_id) ? desired_policies[iface_id] : NULL;
+	old = atomic_exchange_explicit(&policies[iface_id], next, memory_order_acq_rel);
+	if (old != next)
+		rte_rcu_qsbr_synchronize(gr_datapath_rcu(), RTE_QSBR_THRID_INVALID);
+}
+
+static int bridge_port_policy_replace(const struct gr_bridge_port_policy *policy) {
+	struct gr_bridge_port_policy *next, *old_active, *old_desired;
+
+	next = rte_zmalloc(__func__, sizeof(*next), RTE_CACHE_LINE_SIZE);
+	if (next == NULL)
+		return errno_set(ENOMEM);
+	*next = *policy;
+
+	old_desired = desired_policies[policy->iface_id];
+	desired_policies[policy->iface_id] = next;
+	old_active = atomic_exchange_explicit(
+		&policies[policy->iface_id],
+		bridge_port_iface_ready(policy->iface_id) ? next : NULL,
+		memory_order_acq_rel
+	);
+	if (old_active != NULL)
+		rte_rcu_qsbr_synchronize(gr_datapath_rcu(), RTE_QSBR_THRID_INVALID);
+
+	// The active policy, when present, is the same allocation as the desired policy.
+	assert(old_active == NULL || old_active == old_desired);
+	rte_free(old_desired);
 	return 0;
 }
 
@@ -87,7 +106,9 @@ static struct api_out bridge_port_get(const void *request, struct api_ctx *) {
 	const struct gr_bridge_port_policy *policy;
 	struct gr_bridge_port_policy *copy;
 
-	policy = bridge_port_policy_get(req->iface_id);
+	if (req->iface_id >= gr_config.max_ifaces)
+		return api_out(EINVAL, 0, NULL);
+	policy = desired_policies[req->iface_id];
 	if (policy == NULL)
 		return api_out(ENOENT, 0, NULL);
 	copy = malloc(sizeof(*copy));
@@ -98,17 +119,45 @@ static struct api_out bridge_port_get(const void *request, struct api_ctx *) {
 	return api_out(0, sizeof(*copy), copy);
 }
 
+static void bridge_port_policy_clear(uint16_t iface_id) {
+	struct gr_bridge_port_policy *old, *desired;
+
+	old = atomic_exchange_explicit(&policies[iface_id], NULL, memory_order_acq_rel);
+	desired = desired_policies[iface_id];
+	desired_policies[iface_id] = NULL;
+	if (old != NULL)
+		rte_rcu_qsbr_synchronize(gr_datapath_rcu(), RTE_QSBR_THRID_INVALID);
+	assert(old == NULL || old == desired);
+	rte_free(desired);
+}
+
 static void bridge_port_iface_remove(uint32_t, const void *obj) {
 	const struct iface *iface = obj;
-	struct gr_bridge_port_policy *old;
 
-	old = atomic_exchange_explicit(&policies[iface->id], NULL, memory_order_acq_rel);
-	if (old == NULL)
-		return;
-
-	rte_rcu_qsbr_synchronize(gr_datapath_rcu(), RTE_QSBR_THRID_INVALID);
-	rte_free(old);
+	bridge_port_policy_clear(iface->id);
 }
+
+static void bridge_port_iface_reconcile(uint32_t, const void *obj) {
+	const struct iface *iface = obj;
+
+	bridge_port_policy_reconcile(iface->id);
+}
+
+#ifdef __GROUT_UNIT_TEST__
+int bridge_port_policy_test_set(const struct gr_bridge_port_policy *policy) {
+	int ret = bridge_port_policy_validate(policy);
+
+	return ret < 0 ? ret : bridge_port_policy_replace(policy);
+}
+
+void bridge_port_policy_test_reconcile(uint16_t iface_id) {
+	bridge_port_policy_reconcile(iface_id);
+}
+
+void bridge_port_policy_test_clear(uint16_t iface_id) {
+	bridge_port_policy_clear(iface_id);
+}
+#endif
 
 static void bridge_port_init(struct event_base *) {
 	policies = rte_calloc(
@@ -116,11 +165,20 @@ static void bridge_port_init(struct event_base *) {
 	);
 	if (policies == NULL)
 		ABORT("rte_calloc(bridge_port_policies)");
+	desired_policies = rte_calloc(
+		__func__, gr_config.max_ifaces, sizeof(*desired_policies), RTE_CACHE_LINE_SIZE
+	);
+	if (desired_policies == NULL)
+		ABORT("rte_calloc(bridge_port_desired_policies)");
 }
 
 static void bridge_port_fini(struct event_base *) {
+	// The active policy, when present, shares its allocation with the
+	// desired policy: freeing the desired side covers both.
 	for (uint16_t i = 0; i < gr_config.max_ifaces; i++)
-		rte_free(atomic_load_explicit(&policies[i], memory_order_relaxed));
+		rte_free(desired_policies[i]);
+	rte_free(desired_policies);
+	desired_policies = NULL;
 	rte_free(policies);
 	policies = NULL;
 }
@@ -135,5 +193,7 @@ RTE_INIT(bridge_port_constructor) {
 	module_register(&bridge_port_module);
 	api_handler(GR_BRIDGE_PORT_SET, bridge_port_set);
 	api_handler(GR_BRIDGE_PORT_GET, bridge_port_get);
+	event_subscribe(GR_EVENT_IFACE_POST_ADD, bridge_port_iface_reconcile);
+	event_subscribe(GR_EVENT_IFACE_POST_RECONFIG, bridge_port_iface_reconcile);
 	event_subscribe(GR_EVENT_IFACE_REMOVE, bridge_port_iface_remove);
 }

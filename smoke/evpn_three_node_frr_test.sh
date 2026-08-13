@@ -97,9 +97,19 @@ carrier_member_synced() {
 		printf '%s\n' "$details" | grep -q 'ad_partner_oper_port_state 63'
 }
 
-carrier_member_disabled() {
-	ip -n "$carrier" -j link show "$1" |
-		jq -e '.[0].flags | index("UP") == null' >/dev/null
+carrier_member_not_synced() {
+	! carrier_member_synced "$1"
+}
+
+grout_carrier_member_state() {
+	local sock="$1"
+	local protodown="$2"
+	local active="$3"
+
+	grcli -s "$sock" -j interface show name carrier 2>/dev/null |
+		jq -e --argjson protodown "$protodown" --argjson active "$active" \
+			'.bond_members[0] | .protodown == $protodown and .active == $active' \
+			>/dev/null
 }
 
 nhg_member_count_is() {
@@ -524,37 +534,57 @@ configure_mh_carrier() {
 	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
 		fail "known unicast failed after DF change"
 
-	vtysh -N "${nodes[0]}" <<-EOF
-	configure terminal
-	router bgp 65000
-	 neighbor 172.16.0.3 shutdown
-	EOF
-	ip -n "$carrier" link set x-carrier1 down
+	# Fail PE1's EVPN-MH uplink while leaving its carrier-facing port physically
+	# up. FRR must translate uplink tracking into Grout member protodown; Grout
+	# must then withdraw LACP collecting/distributing without silencing LACP.
+	ip -n "$fabric" link set x-u1 down
+	wait_until "FRR-driven PE1 carrier protodown" \
+		grout_carrier_member_state "$tmp/grout1.sock" true false
 	wait_until "carrier LACP member PE1 withdrawal" \
-		carrier_member_disabled x-carrier1
-	wait_until "remote MAC NHG to retain only PE2 after PE1 withdrawal" \
+		carrier_member_not_synced x-carrier1
+	if ! ip -n "$carrier" link show x-carrier1 | grep -qw LOWER_UP; then
+		fail "FRR protodown lowered PE1's physical carrier link"
+	fi
+	wait_until "remote MAC NHG to retain only PE2 after PE1 uplink failure" \
 		nhg_only_vtep_is "$tmp/grout3.sock" "$nhg_id" 172.16.0.2
 	if ! ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10; then
 		for index in 1 2 3; do
 			echo "DIAG: node $index FDB $(grcli -s "$tmp/grout$index.sock" -j fdb show)" \
 				>&2
 		done
-		fail "carrier traffic failed after PE1 withdrawal"
+		fail "carrier traffic failed after PE1 uplink-triggered protodown"
 	fi
 
-	ip -n "$carrier" link set x-carrier1 up
+	ip -n "$fabric" link set x-u1 up
+	wait_until "PE1 underlay recovery" \
+		sh -c "ip -n '${nodes[0]}' -o link show underlay | grep -qw 'state UP'"
+	wait_evpn_peers "${nodes[0]}"
+	wait_until "FRR clears PE1 carrier protodown" \
+		grout_carrier_member_state "$tmp/grout1.sock" false true
 	wait_until "carrier LACP member PE1 recovery" carrier_member_synced x-carrier1
-	vtysh -N "${nodes[0]}" <<-EOF
-	configure terminal
-	router bgp 65000
-	 no neighbor 172.16.0.3 shutdown
-	EOF
 	wait_until "remote MAC NHG to restore PE1" \
 		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
 	capture_local_bias_redirect
 	echo "PASS: local-ES hairpin traffic uses the EVPN backup NHG"
 
-	echo "PASS: EVPN-MH used both PEs and survived PE1 control/carrier withdrawal"
+	# A carrier-side physical failure follows the complementary path: LACP and
+	# the bond go down first, then FRR performs the EVPN mass withdrawal.
+	ip -n "$carrier" link set x-carrier1 down
+	wait_until "Grout detects PE1 physical carrier loss" \
+		grout_carrier_member_state "$tmp/grout1.sock" false false
+	wait_until "remote MAC NHG after PE1 carrier loss" \
+		nhg_only_vtep_is "$tmp/grout3.sock" "$nhg_id" 172.16.0.2
+	ip netns exec "${hosts[2]}" ping -c 3 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after PE1 physical carrier loss"
+
+	ip -n "$carrier" link set x-carrier1 up
+	wait_until "carrier LACP member PE1 physical recovery" carrier_member_synced x-carrier1
+	wait_until "Grout reactivates PE1 after physical carrier recovery" \
+		grout_carrier_member_state "$tmp/grout1.sock" false true
+	wait_until "remote MAC NHG after PE1 physical carrier recovery" \
+		nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+
+	echo "PASS: EVPN-MH survived both FRR protodown and physical carrier loss"
 }
 trap cleanup EXIT
 
@@ -647,13 +677,17 @@ configure_underlay() {
 configure_bgp() {
 	local index="$1"
 	local node="${nodes[$((index - 1))]}"
-	local peer1 peer2
+	local peer1 peer2 timer1 timer2
 
 	case "$index" in
 	1) peer1=2; peer2=3 ;;
 	2) peer1=1; peer2=3 ;;
 	3) peer1=1; peer2=2 ;;
 	esac
+	if [ "$mh_enabled" = true ]; then
+		timer1=" neighbor 172.16.0.$peer1 timers 1 3"
+		timer2=" neighbor 172.16.0.$peer2 timers 1 3"
+	fi
 
 	vtysh -N "$node" <<-EOF
 	configure terminal
@@ -661,7 +695,9 @@ configure_bgp() {
 	 bgp router-id 172.16.0.$index
 	 no bgp default ipv4-unicast
 	 neighbor 172.16.0.$peer1 remote-as 65000
+	$timer1
 	 neighbor 172.16.0.$peer2 remote-as 65000
+	$timer2
 	 address-family l2vpn evpn
 	  neighbor 172.16.0.$peer1 activate
 	  neighbor 172.16.0.$peer2 activate

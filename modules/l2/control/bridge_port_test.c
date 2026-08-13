@@ -140,6 +140,34 @@ static void policy_deactivates_and_replays_across_reconfiguration(void **) {
 	bridge_port_policy_test_clear(test_iface.id);
 }
 
+static void empty_update_clears_active_and_pending_policy(void **) {
+	const struct gr_bridge_port_policy policy = {
+		.iface_id = test_iface.id,
+		.flags = GR_BRIDGE_PORT_F_NON_DF,
+		.backup_nhg_id = 1234,
+		.n_sph_filters = 1,
+		.sph_filters = {peer1},
+	};
+	const struct gr_bridge_port_policy clear = {
+		.iface_id = test_iface.id,
+	};
+
+	test_iface_present = true;
+	test_iface.mode = GR_IFACE_MODE_BRIDGE;
+	assert_int_equal(bridge_port_policy_test_set(&policy), 0);
+	assert_non_null(bridge_port_policy_get(test_iface.id));
+
+	assert_int_equal(bridge_port_policy_test_set(&clear), 0);
+	assert_null(bridge_port_policy_get(test_iface.id));
+
+	// Reconciliation must not resurrect the deleted desired policy.
+	test_iface.mode = GR_IFACE_MODE_VRF;
+	bridge_port_policy_test_reconcile(test_iface.id);
+	test_iface.mode = GR_IFACE_MODE_BRIDGE;
+	bridge_port_policy_test_reconcile(test_iface.id);
+	assert_null(bridge_port_policy_get(test_iface.id));
+}
+
 int main(void) {
 	gr_config.max_ifaces = 1024;
 	bridge_port_module->init(NULL);
@@ -150,6 +178,7 @@ int main(void) {
 		cmocka_unit_test(non_overlay_traffic_is_never_blocked),
 		cmocka_unit_test(policy_waits_until_interface_is_bridge_ready),
 		cmocka_unit_test(policy_deactivates_and_replays_across_reconfiguration),
+		cmocka_unit_test(empty_update_clears_active_and_pending_policy),
 	};
 	return cmocka_run_group_tests(tests, NULL, NULL);
 }

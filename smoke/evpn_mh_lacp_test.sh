@@ -72,9 +72,11 @@ for index in 1 2; do
 	ip -n "$node" link set lo up
 	ip netns exec "$node" env GROUT_SOCK_PATH="$sock" \
 		grout -t -M "unix:$tmp/metrics$index.sock" -- \
-		--file-prefix="$prefix-$index" >"$tmp/grout$index.log" 2>&1 &
+		--file-prefix="$prefix-$index" -m 1024 >"$tmp/grout$index.log" 2>&1 &
 	grout_pids+=("$!")
 	wait_until "Grout node $index API socket" test -S "$sock"
+	grcli -s "$sock" nexthop config set max 128
+	grcli -s "$sock" route config set default rib4-routes 128 rib6-routes 128
 
 	grcli -s "$sock" interface add bond carrier mode lacp \
 		mac 02:00:00:00:10:00

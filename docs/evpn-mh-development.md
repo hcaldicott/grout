@@ -43,7 +43,7 @@ dataplane development; it does not represent physical NIC performance.
 | Bridge-port ordering | Unit and restart pass | Policy can arrive before bridge readiness, becomes active on interface reconciliation and is replayed after a carrier-facing FRR stack restart. |
 | Uplink tracking/protodown | Prototype pass | FRR `DPLANE_OP_INTF_UPDATE` drives explicit Grout LACP-member protodown. Ordinary ingress and egress are suppressed, LACP remains live, remote NHGs withdraw, and both the carrier member and NHG recover in the three-node lab. |
 | Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
-| FRR provider failure result | Prototype pass | The three-node lab forces typed L2 IDs to collide with existing L3 objects. Grout rejects the update, Zebra logs the asynchronous install failure without crashing, EVPN sessions remain established and the existing objects remain intact. |
+| FRR provider failure result | Prototype pass | The three-node lab forces typed L2 IDs to collide with existing L3 objects. Grout rejects install and conditional delete operations, Zebra logs both asynchronous failures without crashing, EVPN sessions remain established and the existing objects remain intact. |
 | FRR stack restart | Prototype pass | Full stop/start on both the remote VM PE and a carrier-facing PE resubscribes the provider, restores EVPN peers, L2 NHG state, bridge policy and carrier reachability. Zebra-only graceful-restart coverage remains. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
@@ -101,8 +101,8 @@ The working prototype reuses ordinary `DPLANE_OP_NH_*`, preserves FRR's
 L2-typed IDs, and adds `NHA_FDB` in the Linux encoder. It deliberately avoids a
 Grout-only callback inside FRR. Before proposing it upstream, add focused FRR
 tests for IPv4 and IPv6 VTEPs, groups, deletes and the Linux netlink encoding.
-The Grout integration harness now covers a rejected typed-L2 install result;
-delete failures, timeouts and an FRR-native mock-provider topotest remain.
+The Grout integration harness now covers rejected typed-L2 install and delete
+results; transport timeouts and an FRR-native mock-provider topotest remain.
 
 Acceptance criteria:
 
@@ -114,7 +114,8 @@ Acceptance criteria:
 
 ### 3. Add Grout L2 nexthop groups and MAC ECMP
 
-Status: prototype tested; focused lifecycle unit coverage and review required.
+Status: prototype tested; direct lifecycle smoke coverage passes, while
+concurrent FDB/NHG stress and review remain.
 
 Extend the Grout L2 API and control-plane model so an external FDB entry can
 refer either to one interface/VTEP or to an L2 nexthop group. Add group members
@@ -129,10 +130,15 @@ use the same software L3/L4 Toeplitz fallback as Grout bonds. Resolving by ID
 avoids a stale FDB pointer if FRR deletes and recreates a group during
 convergence.
 
+FRR deletes are type/origin-conditional inside the Grout API. If an L2 install
+was rejected because its ID belongs to another object, the later withdrawal
+cannot delete that conflicting object by ID alone.
+
 Acceptance criteria:
 
 - Unit tests cover stable per-flow hashing, distinct UDP flows and hardware RSS
-  precedence; focused group deletion-order tests remain to be added.
+  precedence; direct smoke covers missing members, member/group deletion order,
+  type preservation and ID reuse.
 - A remote all-active MAC is installed against an L2 NHG, not one arbitrary
   VTEP.
 - Multiple flows use both remote PEs while packets from one flow remain

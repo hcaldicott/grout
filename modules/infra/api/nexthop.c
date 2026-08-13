@@ -52,6 +52,14 @@ static struct api_out nh_add(const void *request, struct api_ctx *) {
 static struct api_out nh_del(const void *request, struct api_ctx *) {
 	const struct gr_nh_del_req *req = request;
 	struct nexthop *nh;
+	const gr_nh_del_flags_t valid_flags =
+		GR_NH_DEL_F_MATCH_TYPE | GR_NH_DEL_F_MATCH_ORIGIN;
+
+	if (req->flags & ~valid_flags)
+		return api_out(EINVAL, 0, NULL);
+	if ((req->flags & GR_NH_DEL_F_MATCH_TYPE)
+	    && !nexthop_type_valid(req->expected_type))
+		return api_out(EINVAL, 0, NULL);
 
 	nh = nexthop_lookup(&req->nh.base, req->nh.info);
 	if (nh == NULL) {
@@ -59,6 +67,10 @@ static struct api_out nh_del(const void *request, struct api_ctx *) {
 			return api_out(0, 0, NULL);
 		return api_out(ENOENT, 0, NULL);
 	}
+	if ((req->flags & GR_NH_DEL_F_MATCH_TYPE) && nh->type != req->expected_type)
+		return api_out(EPROTOTYPE, 0, NULL);
+	if ((req->flags & GR_NH_DEL_F_MATCH_ORIGIN) && nh->origin != req->expected_origin)
+		return api_out(EPERM, 0, NULL);
 
 	if (nh->type == GR_NH_T_L3) {
 		struct nexthop_info_l3 *l3 = nexthop_info_l3(nh);

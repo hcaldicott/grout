@@ -86,6 +86,8 @@ GR_NH_TYPE_INFO(GR_NH_T_GROUP, nexthop_info_group, {
 	struct nexthop **reta;
 });
 
+GR_NH_TYPE_INFO(GR_NH_T_L2, nexthop_info_l2, { BASE(gr_nexthop_info_l2); });
+
 static inline struct nexthop *
 nexthop_group_get_nh(struct nexthop_info_group *nhg, uint32_t flow_id) {
 	if (likely(nhg->n_members == 1))

@@ -258,6 +258,28 @@ static struct cli_nexthop_formatter group_formatter = {
 	.fill_object = fill_object_group,
 };
 
+static void add_columns_l2(struct gr_table *table) {
+	gr_table_column(table, "VTEP", GR_DISP_LEFT);
+}
+
+static void fill_table_l2(struct gr_table *table, unsigned start_col, const void *info) {
+	const struct gr_nexthop_info_l2 *l2 = info;
+	gr_table_cell(table, start_col, ADDR_F, ADDR_W(l2->vtep.af), &l2->vtep.addr);
+}
+
+static void fill_object_l2(struct gr_object *o, const void *info) {
+	const struct gr_nexthop_info_l2 *l2 = info;
+	gr_object_field(o, "vtep", 0, ADDR_F, ADDR_W(l2->vtep.af), &l2->vtep.addr);
+}
+
+static struct cli_nexthop_formatter l2_formatter = {
+	.name = "l2",
+	.type = GR_NH_T_L2,
+	.add_columns = add_columns_l2,
+	.fill_table = fill_table_l2,
+	.fill_object = fill_object_l2,
+};
+
 static int complete_nh_types(
 	struct gr_api_client *,
 	const struct ec_node *node,
@@ -781,4 +803,5 @@ static void __attribute__((constructor, used)) init(void) {
 	cli_nexthop_formatter_register(&blackhole_formatter);
 	cli_nexthop_formatter_register(&reject_formatter);
 	cli_nexthop_formatter_register(&group_formatter);
+	cli_nexthop_formatter_register(&l2_formatter);
 }

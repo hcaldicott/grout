@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Harrison Caldicott <harrison@itsfubar.com.au>
+Date: Thu, 13 Aug 2026 21:00:00 +1000
+Subject: [PATCH] zebra: route EVPN-MH L2 nexthops through dplane
+
+EVPN multihoming installs its FDB nexthops and MAC ECMP groups by
+calling the netlink implementation directly. This crashes zebra when a
+non-kernel dataplane provider is active because that provider may not
+initialize the kernel command socket.
+
+Represent the L2 nexthops with the existing typed nexthop IDs and queue
+them through the normal dataplane path. Teach the netlink encoder to
+retain the NHA_FDB attribute and to accept an FDB nexthop without an
+output interface so the kernel provider's behaviour remains unchanged.
+
+Signed-off-by: Harrison Caldicott <harrison@itsfubar.com.au>
+---
+
+diff --git a/zebra/rt_netlink.c b/zebra/rt_netlink.c
+index 8f294ec..6d15406 100644
+--- a/zebra/rt_netlink.c
++++ b/zebra/rt_netlink.c
+@@ -3135,6 +3135,7 @@ ssize_t netlink_nexthop_msg_encode(uint16_t cmd,
+ 	int type = dplane_ctx_get_nhe_type(ctx);
+ 	struct rtattr *nest;
+ 	uint16_t encap;
++	bool fdb_nexthop;
+ 	struct nlsock *nl =
+ 		kernel_netlink_nlsock_lookup(dplane_ctx_get_ns_sock(ctx));
+ 
+@@ -3195,6 +3196,11 @@ ssize_t netlink_nexthop_msg_encode(uint16_t cmd,
+ 
+ 	if (!nl_attr_put32(&req->n, buflen, NHA_ID, id))
+ 		return 0;
++	fdb_nexthop = (id >> NHG_ID_TYPE_POS) == NHG_TYPE_L2_NH ||
++		       (id >> NHG_ID_TYPE_POS) == NHG_TYPE_L2;
++	if (cmd == RTM_NEWNEXTHOP && fdb_nexthop &&
++	    !nl_attr_put(&req->n, buflen, NHA_FDB, NULL, 0))
++		return 0;
+ 
+ 	if (cmd == RTM_NEWNEXTHOP) {
+ 		/*
+@@ -3259,6 +3265,9 @@ ssize_t netlink_nexthop_msg_encode(uint16_t cmd,
+ 				break;
+ 			}
+ 
++			if (fdb_nexthop)
++				goto nexthop_done;
++
+ 			if (!nh->ifindex) {
+ 				flog_err(
+ 					EC_ZEBRA_NHG_FIB_UPDATE,
+diff --git a/zebra/zebra_dplane.c b/zebra/zebra_dplane.c
+index 13ea81b..9b057ec 100644
+--- a/zebra/zebra_dplane.c
++++ b/zebra/zebra_dplane.c
+@@ -4878,6 +4878,66 @@ dplane_nexthop_update_internal(struct nhg_hash_entry *nhe, enum dplane_op_e op)
+ 	return result;
+ }
+ 
++static enum zebra_dplane_result
++dplane_l2_nexthop_update_internal(uint32_t id, const struct ipaddr *vtep_ip,
++				 uint16_t nh_count,
++				 const struct nh_grp *members,
++				 enum dplane_op_e op)
++{
++	enum zebra_dplane_result result = ZEBRA_DPLANE_REQUEST_FAILURE;
++	struct zebra_dplane_ctx *ctx;
++	struct nexthop *nh;
++	int ret;
++
++	if (!id || nh_count > MULTIPATH_NUM)
++		return result;
++
++	ctx = dplane_ctx_alloc();
++	ctx->zd_op = op;
++	ctx->zd_status = ZEBRA_DPLANE_REQUEST_SUCCESS;
++	ctx->zd_vrf_id = VRF_DEFAULT;
++	ctx->u.rinfo.nhe.id = id;
++	ctx->u.rinfo.nhe.vrf_id = VRF_DEFAULT;
++	ctx->u.rinfo.nhe.type = ZEBRA_ROUTE_BGP;
++	dplane_ctx_ns_init(ctx, zebra_ns_lookup(NS_DEFAULT), false);
++
++	if (vtep_ip) {
++		nh = nexthop_new();
++		if (IS_IPADDR_V4(vtep_ip)) {
++			ctx->u.rinfo.nhe.afi = AFI_IP;
++			nh->type = NEXTHOP_TYPE_IPV4;
++			nh->gate.ipv4 = vtep_ip->ipaddr_v4;
++		} else if (IS_IPADDR_V6(vtep_ip)) {
++			ctx->u.rinfo.nhe.afi = AFI_IP6;
++			nh->type = NEXTHOP_TYPE_IPV6;
++			nh->gate.ipv6 = vtep_ip->ipaddr_v6;
++		} else {
++			nexthop_free(nh);
++			dplane_ctx_free(&ctx);
++			return result;
++		}
++		SET_FLAG(nh->flags, NEXTHOP_FLAG_ACTIVE);
++		ctx->u.rinfo.nhe.ng.nexthop = nh;
++	} else if (nh_count) {
++		memcpy(ctx->u.rinfo.nhe.nh_grp, members,
++		       sizeof(*members) * nh_count);
++		ctx->u.rinfo.nhe.nh_grp_count = nh_count;
++	}
++
++	ret = dplane_update_enqueue(ctx);
++	atomic_fetch_add_explicit(&zdplane_info.dg_nexthops_in, 1,
++				  memory_order_relaxed);
++	if (ret == AOK)
++		result = ZEBRA_DPLANE_REQUEST_QUEUED;
++	else {
++		atomic_fetch_add_explicit(&zdplane_info.dg_nexthop_errors, 1,
++					  memory_order_relaxed);
++		dplane_ctx_free(&ctx);
++	}
++
++	return result;
++}
++
+ /*
+  * Enqueue a route 'add' for the dataplane.
+  */
+@@ -5070,6 +5130,32 @@ enum zebra_dplane_result dplane_nexthop_delete(struct nhg_hash_entry *nhe)
+ 	return ret;
+ }
+ 
++enum zebra_dplane_result dplane_l2_nexthop_add(
++	uint32_t id, const struct ipaddr *vtep_ip)
++{
++	return dplane_l2_nexthop_update_internal(
++		id, vtep_ip, 0, NULL, DPLANE_OP_NH_INSTALL);
++}
++
++enum zebra_dplane_result dplane_l2_nexthop_delete(uint32_t id)
++{
++	return dplane_l2_nexthop_update_internal(
++		id, NULL, 0, NULL, DPLANE_OP_NH_DELETE);
++}
++
++enum zebra_dplane_result dplane_l2_nexthop_group_add(
++	uint32_t id, uint16_t nh_count, const struct nh_grp *members)
++{
++	return dplane_l2_nexthop_update_internal(
++		id, NULL, nh_count, members, DPLANE_OP_NH_INSTALL);
++}
++
++enum zebra_dplane_result dplane_l2_nexthop_group_delete(uint32_t id)
++{
++	return dplane_l2_nexthop_update_internal(
++		id, NULL, 0, NULL, DPLANE_OP_NH_DELETE);
++}
++
+ /*
+  * Enqueue LSP add for the dataplane.
+  */
+diff --git a/zebra/zebra_dplane.h b/zebra/zebra_dplane.h
+index fc8aae1..79f64f8 100644
+--- a/zebra/zebra_dplane.h
++++ b/zebra/zebra_dplane.h
+@@ -931,6 +931,12 @@ struct nhg_hash_entry;
+ enum zebra_dplane_result dplane_nexthop_add(struct nhg_hash_entry *nhe);
+ enum zebra_dplane_result dplane_nexthop_update(struct nhg_hash_entry *nhe);
+ enum zebra_dplane_result dplane_nexthop_delete(struct nhg_hash_entry *nhe);
++enum zebra_dplane_result dplane_l2_nexthop_add(uint32_t id,
++					       const struct ipaddr *vtep_ip);
++enum zebra_dplane_result dplane_l2_nexthop_delete(uint32_t id);
++enum zebra_dplane_result dplane_l2_nexthop_group_add(
++	uint32_t id, uint16_t nh_count, const struct nh_grp *members);
++enum zebra_dplane_result dplane_l2_nexthop_group_delete(uint32_t id);
+ 
+ /*
+  * Enqueue LSP change operations for the dataplane.
+diff --git a/zebra/zebra_evpn_mh.c b/zebra/zebra_evpn_mh.c
+index 2c95342..f065094 100644
+--- a/zebra/zebra_evpn_mh.c
++++ b/zebra/zebra_evpn_mh.c
+@@ -1422,7 +1422,7 @@ static void zebra_evpn_nhg_update(struct zebra_evpn_es *es)
+ 				   es->nhg_id, nh_str);
+ 		}
+ 
+-		kernel_upd_mac_nhg(es->nhg_id, nh_cnt, nh_ids);
++		dplane_l2_nexthop_group_add(es->nhg_id, nh_cnt, nh_ids);
+ 		if (!(es->flags & ZEBRA_EVPNES_NHG_ACTIVE)) {
+ 			es->flags |= ZEBRA_EVPNES_NHG_ACTIVE;
+ 			/* add backup NHG to the br-port */
+@@ -1442,7 +1442,7 @@ static void zebra_evpn_nhg_update(struct zebra_evpn_es *es)
+ 				zebra_evpn_es_br_port_dplane_update(es,
+ 								    __func__);
+ 			zebra_evpn_nhg_mac_update(es);
+-			kernel_del_mac_nhg(es->nhg_id);
++			dplane_l2_nexthop_group_delete(es->nhg_id);
+ 		}
+ 	}
+ 
+@@ -1522,7 +1522,7 @@ static struct zebra_evpn_l2_nh *zebra_evpn_l2_nh_alloc(struct ipaddr *vtep_ip)
+ 	}
+ 
+ 	/* install the NH in the dataplane */
+-	kernel_upd_mac_nh(nh->nh_id, &nh->vtep_ip);
++	dplane_l2_nexthop_add(nh->nh_id, &nh->vtep_ip);
+ 
+ 	return nh;
+ }
+@@ -1530,7 +1530,7 @@ static struct zebra_evpn_l2_nh *zebra_evpn_l2_nh_alloc(struct ipaddr *vtep_ip)
+ static void zebra_evpn_l2_nh_free(struct zebra_evpn_l2_nh *nh)
+ {
+ 	/* delete the NH from the dataplane */
+-	kernel_del_mac_nh(nh->nh_id);
++	dplane_l2_nexthop_delete(nh->nh_id);
+ 
+ 	zebra_evpn_nhid_free(nh->nh_id, NULL);
+ 	hash_release(zmh_info->nh_ip_table, nh);
+@@ -1958,7 +1958,7 @@ static void zebra_evpn_es_free(struct zebra_evpn_es **esp)
+ 	/* If the NHG is still installed uninstall it and free the id */
+ 	if (es->flags & ZEBRA_EVPNES_NHG_ACTIVE) {
+ 		es->flags &= ~ZEBRA_EVPNES_NHG_ACTIVE;
+-		kernel_del_mac_nhg(es->nhg_id);
++		dplane_l2_nexthop_group_delete(es->nhg_id);
+ 	}
+ 	zebra_evpn_nhid_free(es->nhg_id, es);
+ 
+--
+2.51.0
+

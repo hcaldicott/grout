@@ -22,7 +22,7 @@ dataplane development; it does not represent physical NIC performance.
 | Capability | Result | Evidence |
 | --- | --- | --- |
 | AlmaLinux 9.8 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build natively on arm64. |
-| Unit suite | Pass | All 11 Meson unit tests pass, including RSS/software flow-hash coverage. |
+| Unit suite | Pass | All 12 Meson unit tests pass, including RSS/software flow-hash and bridge-port policy coverage. |
 | Three-node BGP EVPN | Pass | All peers establish and exchange EVPN routes. |
 | Three-node VXLAN bridge | Pass | Host traffic crosses node 1 to node 3 in both directions. |
 | Split-chassis carrier LACP | Pass | A Linux carrier bond selects both Grout links in one aggregator when both chassis advertise the same LACP system MAC. |
@@ -32,8 +32,9 @@ dataplane development; it does not represent physical NIC performance.
 | EVPN Type-1 routes | Pass with FRR prototype | Both PEs advertise per-ES and per-EVI routes; the remote PE receives all four paths without a zebra crash. |
 | FRR L2 NH/NHG handoff | Prototype pass | The provider installs FRR's typed L2 VTEPs and two-member MAC-ECMP group in Grout. |
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
-| DF and split-horizon enforcement | Missing | The Grout provider does not implement `DPLANE_OP_BR_PORT_UPDATE`; the bridge datapath has no non-DF gate or ES peer-VTEP filter. |
+| DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
 | Uplink tracking/protodown | Missing | The Grout provider does not implement the relevant `DPLANE_OP_INTF_UPDATE` state. |
+| Startup MAC reconciliation | Known gap | A carrier MAC learned before its ES-EVI is ready can remain advertised without an ESI. The converged dataplane test pins the simulated carrier MAC on both ES members; restart/reconciliation must upgrade existing learned entries automatically. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
 FRR 10.6.1 already calculates the EVPN-MH control-plane state. The bundled
@@ -130,11 +131,21 @@ Acceptance criteria:
 
 ### 4. Enforce DF state and split horizon
 
-Status: missing.
+Status: prototype tested; lifecycle and restart coverage remain.
 
 Implement `DPLANE_OP_BR_PORT_UPDATE` in the Grout FRR provider and corresponding
 Grout APIs. Apply non-DF filtering for BUM traffic, the backup NHG reference and
 the peer-VTEP split-horizon filter in the accelerated bridge/VXLAN graph.
+
+The working implementation replaces each bridge-member policy atomically under
+QSBR, exposes the installed state through `grcli bridge-port show`, suppresses
+overlay BUM on a non-DF port, and blocks both unicast and BUM received from an
+ES peer VTEP. It also redirects a local-ES hairpin through FRR's backup L2 NHG.
+The lab verifies that only the elected DF emits carrier-facing BUM, changes the
+DF with `es-df-pref`, and proves the peer-VTEP filter with directly injected
+VXLAN traffic. It also teaches a MAC on a local ES and verifies that a hairpin
+frame is redirected through the backup NHG. Restart and delete ordering still
+need to be tested.
 
 Acceptance criteria:
 
@@ -151,6 +162,10 @@ Status: missing.
 Implement the interface-state part of `DPLANE_OP_INTF_UPDATE` needed by FRR
 EVPN-MH. Map protodown and uplink state to Grout bond forwarding state without
 disrupting LACP control packets required for recovery.
+
+Also reconcile local FDB entries when an ES-EVI becomes ready. The current lab
+demonstrated that a carrier MAC learned before that transition may keep a
+non-ESI Type-2 route rather than being upgraded to the ES MAC-ECMP path.
 
 Acceptance criteria:
 
@@ -229,6 +244,7 @@ qualification.
 2. Add FRR tests for the working L2 NH/NHG dataplane representation and prepare
    it for upstream review.
 3. Add focused Grout L2 NH/NHG create, replace and deletion-order unit tests.
-4. Implement the bridge-port update API and DF/split-horizon enforcement.
+4. Add bridge-port restart and delete-ordering tests, then prepare the API and
+   dataplane changes for upstream review.
 5. Extend failure convergence through carrier-link, underlay and daemon restart
    cases before beginning the VM migration phase.

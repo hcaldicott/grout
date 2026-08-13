@@ -16,6 +16,7 @@
 struct bond_member {
 	struct iface *iface;
 	bool active;
+	bool protodown;
 	bool need_to_transmit; // Need to send immediately
 	gr_clock_ns_t next_tx; // Next time we need to send a LACP packet
 	gr_clock_ns_t last_rx; // Last time we received a LACP packet
@@ -38,3 +39,4 @@ GR_IFACE_INFO(GR_IFACE_TYPE_BOND, iface_info_bond, {
 });
 
 void bond_update_active_members(struct iface *);
+void lacp_wakeup(void);

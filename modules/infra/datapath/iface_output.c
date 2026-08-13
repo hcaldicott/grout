@@ -9,6 +9,8 @@
 #include "rxtx.h"
 #include "vlan.h"
 
+#include <rte_ether.h>
+
 #include <stdint.h>
 
 LOG_TYPE("graph");
@@ -16,6 +18,7 @@ LOG_TYPE("graph");
 enum {
 	INVAL = 0,
 	IFACE_DOWN,
+	IFACE_PROTODOWN,
 	NO_PARENT,
 	NB_EDGES,
 };
@@ -95,6 +98,19 @@ static uint16_t iface_output_process(
 			edge = NO_PARENT;
 			goto next;
 		}
+		if (d->iface->state & GR_IFACE_S_PROTODOWN) {
+			const struct rte_ether_hdr *eth;
+
+			if (rte_pktmbuf_pkt_len(m) < sizeof(*eth)) {
+				edge = IFACE_PROTODOWN;
+				goto next;
+			}
+			eth = rte_pktmbuf_mtod(m, const struct rte_ether_hdr *);
+			if (eth->ether_type != RTE_BE16(RTE_ETHER_TYPE_SLOW)) {
+				edge = IFACE_PROTODOWN;
+				goto next;
+			}
+		}
 		if (!(d->iface->flags & GR_IFACE_F_UP)) {
 			edge = IFACE_DOWN;
 			goto next;
@@ -129,6 +145,7 @@ static struct rte_node_register node = {
 	.next_nodes = {
 		[INVAL] = "iface_output_inval_type",
 		[IFACE_DOWN] = "iface_output_admin_down",
+		[IFACE_PROTODOWN] = "iface_output_protodown",
 		[NO_PARENT] = "iface_output_vlan_no_parent",
 	},
 };
@@ -144,4 +161,5 @@ GR_NODE_REGISTER(info);
 
 GR_DROP_REGISTER(iface_output_inval_type);
 GR_DROP_REGISTER(iface_output_admin_down);
+GR_DROP_REGISTER(iface_output_protodown);
 GR_DROP_REGISTER(iface_output_vlan_no_parent);

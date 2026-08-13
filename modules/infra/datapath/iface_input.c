@@ -8,11 +8,14 @@
 #include "rxtx.h"
 #include "vlan.h"
 
+#include <rte_ether.h>
+
 LOG_TYPE("graph");
 
 enum {
 	IFACE_MODE_UNKNOWN = 0,
 	IFACE_DOWN,
+	IFACE_PROTODOWN,
 	UNKNOWN_VLAN,
 	NB_EDGES,
 };
@@ -70,6 +73,19 @@ iface_input_process(struct rte_graph *graph, struct rte_node *node, void **objs,
 		d = iface_mbuf_data(m);
 		vlan_id = d->vlan_id;
 		parent_iface = d->iface;
+		if (d->iface->state & GR_IFACE_S_PROTODOWN) {
+			const struct rte_ether_hdr *eth;
+
+			if (rte_pktmbuf_pkt_len(m) < sizeof(*eth)) {
+				edge = IFACE_PROTODOWN;
+				goto next;
+			}
+			eth = rte_pktmbuf_mtod(m, const struct rte_ether_hdr *);
+			if (eth->ether_type != RTE_BE16(RTE_ETHER_TYPE_SLOW)) {
+				edge = IFACE_PROTODOWN;
+				goto next;
+			}
+		}
 
 		if (d->vlan_id != 0 && d->iface->mode == GR_IFACE_MODE_VRF) {
 			if (last_iface_id != d->iface->id || d->vlan_id != last_vlan_id) {
@@ -120,6 +136,7 @@ static struct rte_node_register node = {
 	.next_nodes = {
 		[IFACE_MODE_UNKNOWN] = "iface_mode_unknown",
 		[IFACE_DOWN] = "iface_input_admin_down",
+		[IFACE_PROTODOWN] = "iface_input_protodown",
 		[UNKNOWN_VLAN] = "iface_input_unknown_vlan",
 		// other edges are updated dynamically with iface_input_mode_register
 	},
@@ -135,4 +152,5 @@ GR_NODE_REGISTER(info);
 
 GR_DROP_REGISTER(iface_mode_unknown);
 GR_DROP_REGISTER(iface_input_admin_down);
+GR_DROP_REGISTER(iface_input_protodown);
 GR_DROP_REGISTER(iface_input_unknown_vlan);

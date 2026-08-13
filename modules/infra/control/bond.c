@@ -4,6 +4,7 @@
 #include "bond.h"
 #include "event.h"
 #include "log.h"
+#include "module.h"
 #include "port.h"
 #include "vrf.h"
 #include "worker.h"
@@ -302,7 +303,8 @@ void bond_update_active_members(struct iface *iface) {
 
 			// Add to active members if link is up and LACP member is valid
 			if ((member->iface->flags & GR_IFACE_F_UP)
-			    && (member->iface->state & GR_IFACE_S_RUNNING) && member->active) {
+			    && (member->iface->state & GR_IFACE_S_RUNNING) && member->active
+			    && !member->protodown) {
 				LOG(DEBUG,
 				    "bond %s member %s active",
 				    iface->name,
@@ -423,6 +425,7 @@ static void bond_to_api(void *info, const struct iface *iface) {
 	api->primary_member = bond->primary_member;
 	for (uint8_t i = 0; i < bond->n_members; i++) {
 		api->members[i].iface_id = bond->members[i].iface->id;
+		api->members[i].protodown = bond->members[i].protodown;
 		switch (bond->mode) {
 		case GR_BOND_MODE_ACTIVE_BACKUP:
 			api->members[i].active = i == bond->active_member;
@@ -432,6 +435,64 @@ static void bond_to_api(void *info, const struct iface *iface) {
 			break;
 		}
 	}
+}
+
+static struct api_out bond_member_set(const void *request, struct api_ctx *) {
+	const struct gr_bond_member_set_req *req = request;
+	struct iface_info_bond *bond;
+	struct bond_member *member = NULL;
+	struct iface *bond_iface;
+	struct iface *member_iface;
+
+	member_iface = iface_from_id(req->member_iface_id);
+	if (member_iface == NULL)
+		return api_out(ENODEV, 0, NULL);
+	if (member_iface->type != GR_IFACE_TYPE_PORT || member_iface->mode != GR_IFACE_MODE_BOND
+	    || member_iface->domain_id == GR_IFACE_ID_UNDEF)
+		return api_out(EMEDIUMTYPE, 0, NULL);
+
+	bond_iface = iface_from_id(member_iface->domain_id);
+	if (bond_iface == NULL || bond_iface->type != GR_IFACE_TYPE_BOND)
+		return api_out(ENODEV, 0, NULL);
+	if (req->bond_iface_id != GR_IFACE_ID_UNDEF && req->bond_iface_id != bond_iface->id)
+		return api_out(ENOLINK, 0, NULL);
+
+	bond = iface_info_bond(bond_iface);
+	if (bond->mode != GR_BOND_MODE_LACP)
+		return api_out(EPROTONOSUPPORT, 0, NULL);
+
+	for (uint8_t i = 0; i < bond->n_members; i++) {
+		if (bond->members[i].iface == member_iface) {
+			member = &bond->members[i];
+			break;
+		}
+	}
+	if (member == NULL)
+		return api_out(ENOLINK, 0, NULL);
+	if (member->protodown == req->protodown)
+		return api_out(0, 0, NULL);
+
+	member->protodown = req->protodown;
+	member->active = false;
+	member->local.state &= ~(
+		LACP_STATE_SYNCHRONIZED | LACP_STATE_COLLECTING | LACP_STATE_DISTRIBUTING
+	);
+	member->need_to_transmit = true;
+	member->next_tx = 0;
+	if (req->protodown)
+		member_iface->state |= GR_IFACE_S_PROTODOWN;
+	else
+		member_iface->state &= ~GR_IFACE_S_PROTODOWN;
+
+	LOG(NOTICE,
+	    "bond %s member %s protodown %s",
+	    bond_iface->name,
+	    member_iface->name,
+	    req->protodown ? "on" : "off");
+	bond_update_active_members(bond_iface);
+	lacp_wakeup();
+
+	return api_out(0, 0, NULL);
 }
 
 static const struct iface_type iface_type_bond = {
@@ -469,6 +530,7 @@ static void bond_event(uint32_t /*event*/, const void *obj) {
 
 RTE_INIT(bond_constructor) {
 	iface_type_register(&iface_type_bond);
+	api_handler(GR_BOND_MEMBER_SET, bond_member_set);
 	event_subscribe(GR_EVENT_IFACE_STATUS_UP, bond_event);
 	event_subscribe(GR_EVENT_IFACE_STATUS_DOWN, bond_event);
 }

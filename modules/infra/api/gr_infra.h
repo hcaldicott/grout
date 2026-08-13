@@ -41,6 +41,7 @@ typedef enum : uint16_t {
 	GR_IFACE_S_RUNNING = GR_BIT16(0),
 	GR_IFACE_S_PROMISC_FIXED = GR_BIT16(1),
 	GR_IFACE_S_ALLMULTI = GR_BIT16(2),
+	GR_IFACE_S_PROTODOWN = GR_BIT16(3),
 } gr_iface_state_t;
 
 // Undefined interface ID.
@@ -198,6 +199,7 @@ static inline const char *gr_bond_algo_name(gr_bond_algo_t algo) {
 struct gr_bond_member {
 	uint16_t iface_id; // Must be a port interface.
 	bool active; // Can be used to transmit traffic.
+	bool protodown; // LACP remains active, ordinary ingress/egress is suppressed.
 };
 
 // Info for GR_IFACE_TYPE_BOND interfaces
@@ -254,6 +256,7 @@ enum gr_infra_requests : uint32_t {
 	GR_IFACE_MAC_DEL,
 	GR_IFACE_MAC_LIST,
 	GR_IFACE_MAC_SET,
+	GR_BOND_MEMBER_SET,
 };
 
 enum gr_infra_events : uint32_t {
@@ -364,6 +367,16 @@ struct gr_iface_set_req {
 };
 
 GR_REQ(GR_IFACE_SET, struct gr_iface_set_req, struct gr_empty);
+
+// Suppress or reinstate one LACP bond member without disabling its physical
+// interface. LACP control packets continue to pass while protodown is set.
+struct gr_bond_member_set_req {
+	uint16_t bond_iface_id; // GR_IFACE_ID_UNDEF to infer from member_iface_id.
+	uint16_t member_iface_id; // Must be a port attached to an LACP bond.
+	bool protodown;
+};
+
+GR_REQ(GR_BOND_MEMBER_SET, struct gr_bond_member_set_req, struct gr_empty);
 
 // Get interface statistics.
 struct gr_iface_stats {

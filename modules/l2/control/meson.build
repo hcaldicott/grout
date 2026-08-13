@@ -13,7 +13,12 @@ inc += include_directories('.')
 
 tests += [
   {
-    'sources': files('bridge_port_test.c'),
-    'link_args': [],
+    'sources': files('bridge_port_test.c', 'bridge_port.c'),
+    'link_args': [
+      '-Wl,--wrap=iface_from_id',
+      '-Wl,--wrap=rte_free',
+      '-Wl,--wrap=rte_rcu_qsbr_synchronize',
+      '-Wl,--wrap=rte_zmalloc',
+    ],
   }
 ]

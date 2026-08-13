@@ -70,6 +70,12 @@ GR_IFACE_INFO(GR_IFACE_TYPE_VXLAN, iface_info_vxlan, {
 // valid until the current datapath RCU grace period completes.
 const struct gr_bridge_port_policy *bridge_port_policy_get(uint16_t iface_id);
 
+#ifdef __GROUT_UNIT_TEST__
+int bridge_port_policy_test_set(const struct gr_bridge_port_policy *policy);
+void bridge_port_policy_test_reconcile(uint16_t iface_id);
+void bridge_port_policy_test_clear(uint16_t iface_id);
+#endif
+
 static inline bool bridge_port_policy_blocks_overlay(
 	const struct gr_bridge_port_policy *policy,
 	const struct l3_addr *src_vtep,

@@ -1104,6 +1104,7 @@ void grout_macfdb_change(const struct gr_fdb_entry *fdb, bool new) {
 
 enum zebra_dplane_result grout_macfdb_update_ctx(struct zebra_dplane_ctx *ctx) {
 	bool add = dplane_ctx_get_op(ctx) == DPLANE_OP_MAC_INSTALL;
+	vlanid_t vlan = dplane_ctx_mac_get_vlan(ctx);
 	uint32_t req_type;
 	size_t len;
 	void *req;
@@ -1119,9 +1120,17 @@ enum zebra_dplane_result grout_macfdb_update_ctx(struct zebra_dplane_ctx *ctx) {
 		ifindex_frr_to_grout(dplane_ctx_get_ifindex(ctx)),
 		ifindex_frr_to_grout(dplane_ctx_get_ifindex(ctx)),
 		dplane_ctx_mac_get_addr(ctx),
-		dplane_ctx_mac_get_vlan(ctx),
+		vlan,
 		dplane_ctx_mac_get_vtep_ip(ctx)
 	);
+	if (vlan != GROUT_BRIDGE_VLAN) {
+		gr_log_err(
+			"rejecting MAC update for VLAN %u: Grout bridge domains only accept synthetic VLAN %u",
+			vlan,
+			GROUT_BRIDGE_VLAN
+		);
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
 
 	len = add ? sizeof(struct gr_fdb_add_req) : sizeof(struct gr_fdb_del_req);
 	req = calloc(1, len);

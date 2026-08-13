@@ -107,6 +107,7 @@ dpdk_dep = dependency(
     'enable_docs=false',
     'developer_mode=disabled',
     'cpu_instruction_set=' + get_option('dpdk_cpu'),
+    'platform=' + get_option('dpdk_platform'),
   ],
   static: true,
 )

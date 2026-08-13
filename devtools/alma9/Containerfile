@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Harrison Caldicott
+
+FROM almalinux:9.8
+
+RUN dnf install -y dnf-plugins-core epel-release && \
+	dnf config-manager --set-enabled crb && \
+	dnf install -y --nodocs --setopt=install_weak_deps=0 \
+		autoconf \
+		automake \
+		bison \
+		ccache \
+		codespell \
+		dnsmasq \
+		elfutils-libelf-devel \
+		flex \
+		gcc \
+		gcc-toolset-15-gcc \
+		gcc-toolset-15-gcc-c++ \
+		gcc-toolset-15-gcc-plugin-annobin \
+		gdb \
+		git \
+		graphviz \
+		groff \
+		iproute \
+		iputils \
+		jq \
+		json-c-devel \
+		libarchive-devel \
+		libbpf-devel \
+		libcap-devel \
+		libcmocka-devel \
+		libedit-devel \
+		libevent-devel \
+		libmnl-devel \
+		libtool \
+		libxcrypt-devel \
+		libyang-devel \
+		make \
+		meson \
+		ncurses-devel \
+		ndisc6 \
+		ninja-build \
+		numactl-devel \
+		openssl-devel \
+		pam-devel \
+		patch \
+		pcre2-devel \
+		pkgconf \
+		procps-ng \
+		protobuf-c-compiler \
+		protobuf-c-devel \
+		python3-devel \
+		python3-pyelftools \
+		rdma-core-devel \
+		readline-devel \
+		rpm-build \
+		scdoc \
+		socat \
+		sudo \
+		systemd \
+		systemd-devel \
+		systemd-udev \
+		tcpdump \
+		time \
+		tmux \
+		traceroute \
+		util-linux && \
+	dnf clean all
+
+ENV PATH=/opt/rh/gcc-toolset-15/root/usr/bin:$PATH
+ENV CC="ccache /opt/rh/gcc-toolset-15/root/usr/bin/gcc"
+ENV CXX="ccache /opt/rh/gcc-toolset-15/root/usr/bin/g++"
+ENV CCACHE_DIR=/ccache
+ENV DPDK_CPU=generic
+ENV DPDK_PLATFORM=generic
+
+COPY devtools/alma9/entrypoint.sh /usr/local/bin/grout-alma9-entrypoint
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/grout-alma9-entrypoint"]
+CMD ["bash"]

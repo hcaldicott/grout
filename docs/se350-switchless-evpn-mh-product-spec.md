@@ -1156,7 +1156,7 @@ Remaining work:
 
 ### 13.5 Bridge-port policy
 
-The fork adds a replace-only `GR_BRIDGE_PORT_SET` API with:
+The fork adds an atomic `GR_BRIDGE_PORT_SET` API with:
 
 - `GR_BRIDGE_PORT_F_NON_DF`;
 - backup NHG ID;
@@ -1164,13 +1164,14 @@ The fork adds a replace-only `GR_BRIDGE_PORT_SET` API with:
 
 `frr/zebra_dplane_grout.c` consumes `DPLANE_OP_BR_PORT_UPDATE` and writes the
 policy. `modules/l2/datapath/bridge_input.c` and `bridge_flood.c` enforce it.
-`grcli bridge-port show` exposes the installed state.
+`grcli bridge-port show` exposes the installed state. A policy with no flags,
+backup NHG or split-horizon filters deletes both active and pending desired
+state; this is the form FRR emits when an ES is removed.
 
 Remaining work:
 
-- reset/delete semantics when FRR removes an ES;
-- replay after Zebra reconnect;
 - policy cleanup when a member or bridge is deleted first;
+- ES recreation and repeated replay/delete cycles;
 - IPv6 VTEP functional coverage;
 - capacity behavior if FRR supplies more than the current bounded filter count;
 - provenance-aware transit if distributed ES egress is added.
@@ -1326,7 +1327,7 @@ live migration.
 | Local-bias redirect | Prototype pass | ES hairpin redirects through backup NHG. |
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
-| Bridge-port ordering | Unit and restart pass | Desired policy is retained before bridge readiness and replayed after a carrier-facing full FRR stack restart. |
+| Bridge-port lifecycle | Unit, restart and ES-removal pass | Desired policy is retained before bridge readiness, replayed after a carrier-facing FRR restart, and deleted from active/pending state when FRR removes the ES. LACP remains synchronized. |
 | FRR provider rejection | Prototype pass | A forced typed-ID/type collision is reported as a failed L2 install; Zebra stays healthy with established EVPN sessions and Grout preserves the existing objects. |
 | FRR stack restart | Prototype pass | Remote and carrier-facing stop/start recover provider subscription, EVPN peers, NHG/policy state and traffic. Zebra-only phased restart storms remain. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |

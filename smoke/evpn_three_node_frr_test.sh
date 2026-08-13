@@ -154,6 +154,10 @@ bridge_port_policy_is() {
 		' >/dev/null
 }
 
+bridge_port_policy_absent() {
+	! grcli -s "$1" -j bridge-port show iface carrier >/dev/null 2>&1
+}
+
 remote_fdb_has_nhg() {
 	local sock="$1"
 	local mac="$2"
@@ -755,6 +759,22 @@ configure_mh_carrier() {
 		fail "carrier traffic failed after carrier-facing FRR stack restart"
 
 	echo "PASS: carrier-facing FRR restart replayed EVPN-MH policy and forwarding state"
+
+	# Removing the ES makes FRR send an empty bridge-port update. Grout must
+	# treat that as deletion of both active and desired policy so a later
+	# interface reconciliation cannot resurrect stale non-DF/SPH state.
+	for index in 1 2; do
+		vtysh -N "${nodes[$((index - 1))]}" <<-EOF
+		configure terminal
+		interface carrier
+		 no evpn mh es-id
+		EOF
+		wait_until "node $index bridge policy deletion after ES removal" \
+			bridge_port_policy_absent "$tmp/grout$index.sock"
+	done
+	wait_until "carrier LACP member PE1 after ES removal" carrier_member_synced x-carrier1
+	wait_until "carrier LACP member PE2 after ES removal" carrier_member_synced x-carrier2
+	echo "PASS: ES removal deletes active and desired bridge-port policy"
 }
 trap cleanup EXIT
 

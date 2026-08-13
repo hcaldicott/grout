@@ -308,8 +308,9 @@ surface.
 
 Bridge-port policy arriving before interface bridge readiness is now handled:
 desired policy is retained, activated when the interface becomes ready,
-deactivated while detached and cleared on removal. Unit tests cover the basic
-ordering behavior.
+deactivated while detached and cleared on removal. An empty FRR update deletes
+both active and desired state, including policy queued before interface
+readiness. Unit tests cover these ordering and non-resurrection rules.
 
 The remaining gap is end-to-end restart and replay behavior. The current
 namespace-local FRR launcher cannot reliably reproduce WatchFRR's phased
@@ -318,14 +319,16 @@ dependency restart and integrated configuration replay.
 The three-node harness now persists and fully restarts FRR on both the remote
 VM-facing PE and a carrier-facing PE. It verifies provider resubscription, BGP
 EVPN peer recovery, remote L2 NHG state, carrier bridge-port policy, LACP state
-and end-to-end reachability. This closes full-stack stop/start coverage, but
-does not yet replace the daemon-specific and restart-storm work below.
+and end-to-end reachability. It also removes the ES on both carrier PEs and
+verifies that policy disappears while LACP remains synchronized. This closes
+full-stack stop/start and ES-policy removal coverage, but does not yet replace
+the daemon-specific and restart-storm work below.
 
 #### Remaining work
 
 - Add a namespace-aware phased FRR restart wrapper.
 - Exercise Zebra-only, bgpd-only, full FRR stack and Grout restarts.
-- Add bridge-port delete/recreate and replay-order smoke tests.
+- Add interface/bridge deletion-first, ES recreate and replay-order smoke tests.
 - Verify FDB, L2 NH/NHG, DF policy, split-horizon filters and protodown state
   reconcile in dependency order.
 - Run restart storms with bounded backoff and at least 50 cycles for release
@@ -459,7 +462,7 @@ The following findings are closed and should remain regression-tested:
 | IPv4 first-fragment affinity | MF and fragment offset are both checked; first and later fragments use the same L3-only hash. |
 | Mixed L2/L3 groups | Mixed and nested groups and invalid route/FDB uses are rejected. |
 | Silent synthetic-VLAN collapse | Unsupported tagged state fails visibly at the provider boundary. General multi-VLAN support remains VLAN-001. |
-| Bridge policy before bridge readiness | Desired state is retained and reconciled on interface add/reconfiguration. End-to-end restart coverage remains RESTART-001. |
+| Bridge policy lifecycle | Desired state is retained and reconciled on interface add/reconfiguration; an empty FRR update deletes active and pending policy; restart replay and ES removal pass end to end. Deletion-first and storm coverage remain RESTART-001. |
 | Ambiguous FRR typed-L2 completion | Explicit completion handling was added; a rejected install is logged without a Zebra crash or object corruption. Delete-failure and upstream work remain FRR-001. |
 
 ## Recommended implementation order

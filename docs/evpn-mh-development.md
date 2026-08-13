@@ -156,8 +156,9 @@ ES peer VTEP. It also redirects a local-ES hairpin through FRR's backup L2 NHG.
 The lab verifies that only the elected DF emits carrier-facing BUM, changes the
 DF with `es-df-pref`, and proves the peer-VTEP filter with directly injected
 VXLAN traffic. It also teaches a MAC on a local ES and verifies that a hairpin
-frame is redirected through the backup NHG. Restart and delete ordering still
-need to be tested.
+frame is redirected through the backup NHG. Carrier-facing FRR restart replays
+the complete policy, and removing the ES deletes both active and pending policy
+without disturbing LACP. Interface/bridge deletion-first ordering remains.
 
 Acceptance criteria:
 

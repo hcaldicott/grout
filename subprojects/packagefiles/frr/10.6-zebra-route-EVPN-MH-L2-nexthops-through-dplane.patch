@@ -171,6 +171,52 @@ index fc8aae1..79f64f8 100644
  
  /*
   * Enqueue LSP change operations for the dataplane.
+diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
+index 4b26682..e779a7a 100644
+--- a/zebra/zebra_nhg.c
++++ b/zebra/zebra_nhg.c
+@@ -3540,6 +3540,7 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
+ 	enum dplane_op_e op;
+ 	enum zebra_dplane_result status;
+ 	uint32_t id = 0;
++	uint32_t id_type;
+ 	struct nhg_hash_entry *nhe = NULL;
+ 
+ 	op = dplane_ctx_get_op(ctx);
+@@ -3546,6 +3547,7 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
+ 	status = dplane_ctx_get_status(ctx);
+ 
+ 	id = dplane_ctx_get_nhe_id(ctx);
++	id_type = id >> NHG_ID_TYPE_POS;
+ 
+ 	if (IS_ZEBRA_DEBUG_DPLANE_DETAIL || IS_ZEBRA_DEBUG_NHG_DETAIL)
+ 		zlog_debug(
+@@ -3554,6 +3556,24 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
+ 
+ 	frrtrace(3, frr_zebra, zebra_nhg_dplane_result, op, id, status);
+ 
++	/* EVPN-MH L2 nexthops use typed IDs and deliberately have no ordinary
++	 * nhg_hash_entry. Handle their completion explicitly instead of falling
++	 * through to a lookup that can only miss and silently discard failures.
++	 */
++	if (id_type == NHG_TYPE_L2_NH || id_type == NHG_TYPE_L2) {
++		if (status != ZEBRA_DPLANE_REQUEST_SUCCESS) {
++			if (op == DPLANE_OP_NH_DELETE)
++				flog_err(EC_ZEBRA_DP_DELETE_FAIL,
++					 "Failed to uninstall EVPN-MH L2 nexthop ID (%u) from the dataplane",
++					 id);
++			else
++				flog_err(EC_ZEBRA_DP_INSTALL_FAIL,
++					 "Failed to install EVPN-MH L2 nexthop ID (%u) in the dataplane",
++					 id);
++		}
++		return;
++	}
++
+ 	if (op == DPLANE_OP_NH_DELETE) {
+ 		if (status != ZEBRA_DPLANE_REQUEST_SUCCESS)
+ 			flog_err(
+
 diff --git a/zebra/zebra_evpn_mh.c b/zebra/zebra_evpn_mh.c
 index 2c95342..f065094 100644
 --- a/zebra/zebra_evpn_mh.c
@@ -222,4 +268,3 @@ index 2c95342..f065094 100644
  
 --
 2.51.0
-

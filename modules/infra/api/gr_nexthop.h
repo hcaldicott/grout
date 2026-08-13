@@ -326,8 +326,16 @@ GR_REQ(GR_NH_ADD, struct gr_nh_add_req, struct gr_empty);
 // Delete an existing nexthop.
 // Automatically removes all routes referencing this nexthop.
 // Protected nexthops (Local+Static, Link origin) cannot be deleted.
+typedef enum : uint8_t {
+	GR_NH_DEL_F_MATCH_TYPE = GR_BIT8(0),
+	GR_NH_DEL_F_MATCH_ORIGIN = GR_BIT8(1),
+} gr_nh_del_flags_t;
+
 struct gr_nh_del_req {
 	uint8_t missing_ok;
+	gr_nh_del_flags_t flags;
+	gr_nh_type_t expected_type;
+	gr_nh_origin_t expected_origin;
 	struct gr_nexthop nh;
 };
 

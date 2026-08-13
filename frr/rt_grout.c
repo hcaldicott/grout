@@ -664,10 +664,24 @@ static enum zebra_dplane_result grout_add_nexthop_group(struct zebra_dplane_ctx 
 	return ret;
 }
 
-static enum zebra_dplane_result grout_del_nexthop(uint32_t nh_id) {
+static enum zebra_dplane_result
+grout_del_nexthop(uint32_t nh_id, gr_nh_origin_t origin, uint32_t id_type) {
 	gr_log_debug("nh_id %u", nh_id);
 
-	struct gr_nh_del_req req = {.missing_ok = true, .nh = {.nh_id = nh_id}};
+	struct gr_nh_del_req req = {
+		.missing_ok = true,
+		.nh = {.nh_id = nh_id},
+		.flags = GR_NH_DEL_F_MATCH_ORIGIN,
+		.expected_origin = origin,
+	};
+
+	if (id_type == NHG_TYPE_L2_NH) {
+		req.flags |= GR_NH_DEL_F_MATCH_TYPE;
+		req.expected_type = GR_NH_T_L2;
+	} else if (id_type == NHG_TYPE_L2) {
+		req.flags |= GR_NH_DEL_F_MATCH_TYPE;
+		req.expected_type = GR_NH_T_GROUP;
+	}
 
 	if (grout_client_send_recv(GR_NH_DEL, sizeof(req), &req, NULL) < 0)
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
@@ -956,7 +970,7 @@ enum zebra_dplane_result grout_add_del_nexthop(struct zebra_dplane_ctx *ctx) {
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
 	}
 	if (dplane_ctx_get_op(ctx) == DPLANE_OP_NH_DELETE)
-		return grout_del_nexthop(nh_id);
+		return grout_del_nexthop(nh_id, origin, id_type);
 	if (id_type == NHG_TYPE_L2_NH)
 		return grout_add_l2_nexthop(ctx);
 	if (id_type == NHG_TYPE_L2)

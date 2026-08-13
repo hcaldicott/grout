@@ -1,5 +1,9 @@
 # EVPN multihoming development plan
 
+The active unresolved engineering backlog is maintained in
+`docs/evpn-mh-remaining-gaps.md`. Use that document to select and close work;
+use this document as the implementation plan and evidence record.
+
 ## Objective
 
 Build an all-active, DPDK-accelerated EVPN multihoming dataplane for three
@@ -261,16 +265,18 @@ qualification.
 
 ## Immediate work queue
 
-1. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
+1. Replace the EVPN-MH software-RSS shim with the Grout-owned canonical flow
+   hash described by HASH-001 in `docs/evpn-mh-remaining-gaps.md`.
+2. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
    allocation beyond the current fail-closed single synthetic VLAN.
-2. Add FRR failure-injection tests for the working L2 NH/NHG dataplane
+3. Add FRR failure-injection tests for the working L2 NH/NHG dataplane
    representation and prepare it for upstream review.
-3. Extend the passing live NHG replacement smoke coverage with L2 create and
+4. Extend the passing live NHG replacement smoke coverage with L2 create and
    deletion-order failure injection.
-4. Add bridge-port restart and delete-ordering smoke tests, then prepare the API
+5. Add bridge-port restart and delete-ordering smoke tests, then prepare the API
    and dataplane changes for upstream review.
-5. Harden the protodown prototype with repeated failure loops and provider/API
+6. Harden the protodown prototype with repeated failure loops and provider/API
    unit coverage suitable for upstream review.
-6. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
+7. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
    through carrier-link, underlay and daemon restart cases before beginning the
    VM migration phase.

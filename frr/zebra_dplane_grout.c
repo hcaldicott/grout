@@ -923,6 +923,27 @@ static enum zebra_dplane_result grout_bridge_port_update_ctx(struct zebra_dplane
 	return ZEBRA_DPLANE_REQUEST_SUCCESS;
 }
 
+static enum zebra_dplane_result grout_intf_update_ctx(struct zebra_dplane_ctx *ctx) {
+	struct gr_bond_member_set_req req = {0};
+
+	req.member_iface_id = ifindex_frr_to_grout(dplane_ctx_get_ifindex(ctx));
+	if (req.member_iface_id == GR_IFACE_ID_UNDEF) {
+		gr_log_err(
+			"INTF_UPDATE: no Grout mapping for FRR ifindex %u (%s)",
+			dplane_ctx_get_ifindex(ctx),
+			dplane_ctx_get_ifname(ctx)
+		);
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
+	req.protodown = dplane_ctx_intf_is_protodown(ctx);
+
+	gr_log_debug("INTF_UPDATE: iface=%u protodown=%u", req.member_iface_id, req.protodown);
+	if (grout_client_send_recv(GR_BOND_MEMBER_SET, sizeof(req), &req, NULL) < 0)
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+
+	return ZEBRA_DPLANE_REQUEST_SUCCESS;
+}
+
 // Grout provider callback.
 static enum zebra_dplane_result zd_grout_process_update(struct zebra_dplane_ctx *ctx) {
 	switch (dplane_ctx_get_op(ctx)) {
@@ -955,6 +976,9 @@ static enum zebra_dplane_result zd_grout_process_update(struct zebra_dplane_ctx 
 
 	case DPLANE_OP_BR_PORT_UPDATE:
 		return grout_bridge_port_update_ctx(ctx);
+
+	case DPLANE_OP_INTF_UPDATE:
+		return grout_intf_update_ctx(ctx);
 
 	case DPLANE_OP_SRV6_ENCAP_SRCADDR_SET:
 		return grout_set_sr_tunsrc(ctx);

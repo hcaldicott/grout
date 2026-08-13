@@ -142,9 +142,52 @@ bridge_port_policy_is() {
 
 remote_fdb_has_nhg() {
 	local sock="$1"
+	local mac="$2"
 
 	grcli -s "$sock" -j fdb show 2>/dev/null |
-		jq -e 'any(.[]; .iface == "vxlan100" and .nhg != 0)' >/dev/null
+		jq -e --arg mac "$mac" \
+		'any(.[]; .mac == $mac and .iface == "vxlan100" and .nhg != 0)' \
+		>/dev/null
+}
+
+local_fdb_has_mac() {
+	local sock="$1"
+	local mac="$2"
+
+	grcli -s "$sock" -j fdb show 2>/dev/null |
+		jq -e --arg mac "$mac" \
+		'any(.[]; .mac == $mac and .iface == "carrier")' >/dev/null
+}
+
+local_fdb_lacks_mac() {
+	local sock="$1"
+	local mac="$2"
+
+	! local_fdb_has_mac "$sock" "$mac"
+}
+
+send_carrier_learning_frame() {
+	local iface="$1"
+	local source_mac="$2"
+
+	ip netns exec "$carrier" python3 - "$iface" "$source_mac" <<-'PY'
+	import socket
+	import struct
+	import sys
+
+	iface, source_mac = sys.argv[1:]
+	frame = (
+	    b"\xff" * 6
+	    + bytes.fromhex(source_mac.replace(":", ""))
+	    + struct.pack("!H", 0x88b4)
+	    + b"evpn-mh-carrier-learn"
+	)
+	frame += b"\x00" * (60 - len(frame))
+	sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+	sock.bind((iface, 0))
+	sock.send(frame)
+	sock.close()
+	PY
 }
 
 capture_carrier_bum() {
@@ -307,8 +350,8 @@ capture_local_bias_redirect() {
 	sock.close()
 	PY
 	wait "$capture_pid" || true
-	count=$(tcpdump -qn -r "$pcap" \
-		'src host 172.16.0.2 and dst host 172.16.0.1 and udp dst port 4789' \
+	# Ethernet(14) + IPv4(20) + UDP(8) + VXLAN(8) + inner MACs(12).
+	count=$(tcpdump -qn -r "$pcap" 'ether[62:2] = 0x88ba' \
 		2>/dev/null | wc -l) || fail "could not inspect local-bias capture"
 	[ "$count" -eq 1 ] ||
 		fail "PE2 emitted $count local-bias redirects through its backup NHG, expected 1"
@@ -317,6 +360,7 @@ capture_local_bias_redirect() {
 configure_mh_carrier() {
 	local system_mac=02:00:00:00:10:00
 	local esi=03:02:00:00:00:10:00:00:00:01
+	local carrier_mac
 
 	ip netns add "$carrier"
 	ip -n "$carrier" link set lo up
@@ -339,6 +383,21 @@ configure_mh_carrier() {
 		ip -n "$node" link set "$tap" netns "$carrier"
 		ip -n "$carrier" link set "$tap" master bond0
 		ip -n "$carrier" link set "$tap" up
+	done
+
+	ip -n "$carrier" link set bond0 up
+	for index in 1 2; do
+		wait_until "carrier LACP member $index" \
+			carrier_member_synced "x-carrier$index"
+	done
+
+	carrier_mac=$(ip -n "$carrier" -j link show bond0 | jq -er '.[0].address')
+	send_carrier_learning_frame x-carrier1 "$carrier_mac"
+	wait_until "PE1 pre-ES carrier MAC learning" \
+		local_fdb_has_mac "$tmp/grout1.sock" "$carrier_mac"
+
+	for index in 1 2; do
+		local node="${nodes[$((index - 1))]}"
 
 		wait_until "node $index carrier interface in FRR" \
 			sh -c "vtysh -N '$node' -c 'show interface carrier' | grep -q 'Interface carrier'"
@@ -354,15 +413,13 @@ configure_mh_carrier() {
 		 evpn mh es-sys-mac $system_mac
 		exit
 		EOF
-	done
 
-	ip -n "$carrier" link set bond0 up
-	for index in 1 2; do
-		wait_until "carrier LACP member $index" \
-			carrier_member_synced "x-carrier$index"
 		wait_until "node $index local Ethernet Segment" \
 			sh -c "vtysh -N '${nodes[$((index - 1))]}' -c 'show evpn es' | grep -qi '$esi'"
 	done
+	wait_until "pre-ES carrier MAC reconciliation" \
+		local_fdb_lacks_mac "$tmp/grout1.sock" "$carrier_mac"
+	send_carrier_learning_frame x-carrier1 "$carrier_mac"
 
 	sleep 2
 	for index in 1 2 3; do
@@ -387,14 +444,6 @@ configure_mh_carrier() {
 		return
 	fi
 
-	local carrier_mac
-	carrier_mac=$(ip -n "$carrier" -j link show bond0 | jq -er '.[0].address')
-	# Pin the simulated carrier endpoint on both ES members. Dynamic MACs
-	# learned before ES-EVI readiness need the restart/reconciliation work in
-	# the next tranche; this test is scoped to the converged MH dataplane.
-	for index in 1 2; do
-		grcli -s "$tmp/grout$index.sock" fdb add "$carrier_mac" iface carrier
-	done
 	ip -n "$carrier" address add 10.0.0.10/24 dev bond0
 
 	if ! ip netns exec "$carrier" ping -c 3 -W 2 10.0.0.4; then
@@ -406,7 +455,8 @@ configure_mh_carrier() {
 	fi
 
 	local l2_nhs remote_fdb nhg_id
-	if ! wait_until "remote all-active MAC NHG" remote_fdb_has_nhg "$tmp/grout3.sock"; then
+	if ! wait_until "remote all-active MAC NHG" \
+		remote_fdb_has_nhg "$tmp/grout3.sock" "$carrier_mac"; then
 		for index in 1 2 3; do
 			echo "DIAG: node $index FDB $(grcli -s "$tmp/grout$index.sock" -j fdb show)" \
 				>&2

@@ -12,6 +12,10 @@
 
 #define GROUT_NS NS_DEFAULT
 
+// Grout bridge domains are VLAN-abstracted. Use one synthetic VLAN inside
+// each FRR bridge namespace to associate bridge members with their VNI.
+#define GROUT_BRIDGE_VLAN 1
+
 // Tag identifying the marker route the plugin injects to detect
 // META_QUEUE_EARLY_ROUTE drain completion. Used by the polling logic
 // in zebra_dplane_grout.c and to filter the DELETE round-trip back

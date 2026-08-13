@@ -1327,6 +1327,7 @@ live migration.
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
 | Bridge-port ordering | Unit and restart pass | Desired policy is retained before bridge readiness and replayed after a carrier-facing full FRR stack restart. |
+| FRR provider rejection | Prototype pass | A forced typed-ID/type collision is reported as a failed L2 install; Zebra stays healthy with established EVPN sessions and Grout preserves the existing objects. |
 | FRR stack restart | Prototype pass | Remote and carrier-facing stop/start recover provider subscription, EVPN peers, NHG/policy state and traffic. Zebra-only phased restart storms remain. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |
@@ -1382,9 +1383,10 @@ Exit criteria:
 
 ### Tranche B: implement safe protodown and failure convergence
 
-Status: functional prototype passes the direct split-LACP and three-node
-fabric/carrier failure tests; restart, repeated-stress and upstream-quality unit
-coverage remain.
+Status: functional prototype passes the direct split-LACP, repeated protodown,
+complete withdrawal/recreation, FRR-stack restart and three-node fabric/carrier
+failure tests; long-duration/compound stress and upstream-quality unit coverage
+remain.
 
 Deliverables:
 

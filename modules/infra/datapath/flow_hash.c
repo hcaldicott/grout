@@ -67,7 +67,8 @@ uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mo
 		tuple.v4.dst_addr = l3.ip4->dst_addr;
 		switch (l3.ip4->next_proto_id) {
 		case IPPROTO_UDP:
-			if (l3.ip4->fragment_offset == 0) {
+			if ((rte_be_to_cpu_16(l3.ip4->fragment_offset) & RTE_IPV4_HDR_OFFSET_MASK)
+			    == 0) {
 				l4.udp = rte_pktmbuf_mtod_offset(
 					m,
 					const struct rte_udp_hdr *,
@@ -81,7 +82,8 @@ uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mo
 			}
 			break;
 		case IPPROTO_TCP:
-			if (l3.ip4->fragment_offset == 0) {
+			if ((rte_be_to_cpu_16(l3.ip4->fragment_offset) & RTE_IPV4_HDR_OFFSET_MASK)
+			    == 0) {
 				l4.tcp = rte_pktmbuf_mtod_offset(
 					m,
 					const struct rte_tcp_hdr *,

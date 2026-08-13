@@ -251,6 +251,13 @@ static int rib6_insert_or_replace(
 
 	if (!nexthop_origin_valid(origin))
 		return errno_set(EPFNOSUPPORT);
+	if (nh->type == GR_NH_T_L2)
+		return errno_set(EPROTOTYPE);
+	if (nh->type == GR_NH_T_GROUP) {
+		gr_nh_type_t member_type = nexthop_group_member_type(nh);
+		if (member_type == GR_NH_T_L2 || member_type == GR_NH_T_ALL)
+			return errno_set(EPROTOTYPE);
+	}
 
 	rib = rte_fib6_get_rib(fib);
 

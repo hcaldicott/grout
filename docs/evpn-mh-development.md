@@ -33,7 +33,7 @@ dataplane development; it does not represent physical NIC performance.
 | FRR L2 NH/NHG handoff | Prototype pass | The provider installs FRR's typed L2 VTEPs and two-member MAC-ECMP group in Grout. |
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
 | DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
-| Uplink tracking/protodown | Missing | The Grout provider does not implement the relevant `DPLANE_OP_INTF_UPDATE` state. |
+| Uplink tracking/protodown | Prototype pass | FRR `DPLANE_OP_INTF_UPDATE` drives explicit Grout LACP-member protodown. Ordinary ingress and egress are suppressed, LACP remains live, remote NHGs withdraw, and both the carrier member and NHG recover in the three-node lab. |
 | Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
 | Zebra restart | Harness gap | Grout retains forwarding state when Zebra exits, but the namespace-local FRR launcher cannot yet perform WatchFRR's phased dependency restart and integrated-config replay reliably. A dedicated restart wrapper is required before this becomes a gating smoke test. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
@@ -158,7 +158,7 @@ Acceptance criteria:
 
 ### 5. Uplink tracking and failure convergence
 
-Status: missing.
+Status: prototype tested; daemon restart and repeated-stress coverage remain.
 
 Implement the interface-state part of `DPLANE_OP_INTF_UPDATE` needed by FRR
 EVPN-MH. Map protodown and uplink state to Grout bond forwarding state without
@@ -169,13 +169,22 @@ ordinary local MACs linked to the access interface when the ES is attached or
 detached. The dataplane relearns those MACs with the current ESI instead of
 retaining a stale non-ESI Type-2 route.
 
-Protodown must be implemented as LACP member suppression, not as ordinary
-interface administrative-down. FRR applies `DPLANE_OP_INTF_UPDATE` to the bond
-members. Grout must keep receiving and transmitting LACP PDUs while clearing
-collecting/distributing state, remove the member from the transmit hash, reject
-ordinary ingress data on that member, and restore the LACP state machine on
-recovery. Merely dropping bridge traffic would leave the carrier sending to a
-black hole; clearing `GR_IFACE_F_UP` would also prevent LACP recovery.
+Protodown is implemented as LACP member suppression, not as ordinary interface
+administrative-down. FRR applies `DPLANE_OP_INTF_UPDATE` to the physical bond
+member. Grout keeps the member physically up and continues receiving and
+transmitting LACP PDUs while clearing synchronized, collecting and distributing
+state, removing the member from the transmit hash and rejecting ordinary
+ingress data. Clearing protodown restarts LACP negotiation; the member returns
+to the hash only after the peer again advertises synchronized and collecting.
+
+The split-LACP smoke test exercises the API directly and verifies ordinary
+ingress suppression through the FDB, fail-closed egress through the
+`bond_no_member` graph edge, continued LACP transmission and complete recovery.
+The three-node smoke test then lowers PE1's configured EVPN-MH uplink without
+lowering its carrier port. It observes FRR-driven protodown, carrier LACP
+withdrawal, remote two-to-one NHG convergence, uninterrupted traffic through
+PE2 and automatic restoration. A separate physical carrier-member failure and
+recovery passes the same remote-NHG and traffic checks.
 
 Acceptance criteria:
 
@@ -256,8 +265,8 @@ qualification.
 3. Add focused Grout L2 NH/NHG create, replace and deletion-order unit tests.
 4. Add bridge-port restart and delete-ordering tests, then prepare the API and
    dataplane changes for upstream review.
-5. Add an explicit LACP-member protodown API and map FRR
-   `DPLANE_OP_INTF_UPDATE` to it, with ingress, egress and recovery tests.
+5. Harden the protodown prototype with repeated failure loops and provider/API
+   unit coverage suitable for upstream review.
 6. Add a namespace-aware FRR phased-restart wrapper, then extend convergence
    through carrier-link, underlay and daemon restart cases before beginning the
    VM migration phase.

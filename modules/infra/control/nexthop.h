@@ -13,6 +13,7 @@
 #include <rte_mbuf.h>
 
 #include <assert.h>
+#include <stdatomic.h>
 
 extern struct gr_nexthop_config nh_conf;
 
@@ -78,23 +79,39 @@ struct nh_group_member {
 };
 
 #define MAX_NH_GROUP_RETA_SIZE 4096
-GR_NH_TYPE_INFO(GR_NH_T_GROUP, nexthop_info_group, {
+struct nexthop_group_state {
 	uint16_t n_members;
 	uint16_t reta_size; // MUST BE A POWER OF TWO
+	gr_nh_type_t member_type;
 	struct nexthop *nh; // shortcut when there is a single nexthop in the group
 	struct nh_group_member *members;
 	struct nexthop **reta;
+};
+
+GR_NH_TYPE_INFO(GR_NH_T_GROUP, nexthop_info_group, {
+	_Atomic(struct nexthop_group_state *) state;
 });
 
 GR_NH_TYPE_INFO(GR_NH_T_L2, nexthop_info_l2, { BASE(gr_nexthop_info_l2); });
 
 static inline struct nexthop *
 nexthop_group_get_nh(struct nexthop_info_group *nhg, uint32_t flow_id) {
-	if (likely(nhg->n_members == 1))
-		return nhg->nh;
-	if (unlikely(nhg->n_members == 0))
+	const struct nexthop_group_state *state =
+		atomic_load_explicit(&nhg->state, memory_order_acquire);
+
+	if (unlikely(state == NULL || state->n_members == 0))
 		return NULL;
-	return nhg->reta[flow_id & (nhg->reta_size - 1)];
+	if (likely(state->n_members == 1))
+		return state->nh;
+	return state->reta[flow_id & (state->reta_size - 1)];
+}
+
+static inline gr_nh_type_t nexthop_group_member_type(const struct nexthop *nh) {
+	const struct nexthop_group_state *state;
+
+	assert(nh->type == GR_NH_T_GROUP);
+	state = atomic_load_explicit(&nexthop_info_group(nh)->state, memory_order_acquire);
+	return state == NULL ? GR_NH_T_ALL : state->member_type;
 }
 
 // Lookup an L3 nexthop that matches the specified criteria.

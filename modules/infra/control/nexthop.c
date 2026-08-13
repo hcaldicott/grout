@@ -140,6 +140,9 @@ static struct rte_hash *create_hash_by_id(const struct gr_nexthop_config *c) {
 		.socket_id = SOCKET_ID_ANY,
 		.key_len = sizeof(uint32_t),
 		.entries = c->max_count,
+		// Workers resolve nexthop IDs while the control plane adds and removes
+		// entries. QSBR below provides deferred reclamation for lock-free deletes.
+		.extra_flag = RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF,
 	};
 
 	struct rte_hash *h = rte_hash_create(&params);
@@ -341,19 +344,28 @@ struct nexthop *nexthop_new(const struct gr_nexthop_base *base, const void *info
 int nexthop_update(struct nexthop *nh, const struct gr_nexthop_base *base, const void *info) {
 	const struct nexthop_type_ops *ops = type_ops[base->type];
 	struct gr_nexthop_base backup = nh->base;
+	bool keep_id;
 	int ret;
 
 	if (!nexthop_type_valid(base->type))
 		return errno_set(ESOCKTNOSUPPORT);
 	if (!nexthop_origin_valid(base->origin))
 		return errno_set(EPFNOSUPPORT);
+	if (nh->ref_count > 0 && nh->type != base->type)
+		return errno_set(EPROTOTYPE);
 
-	nexthop_id_put(nh);
+	// An in-place update with the same explicit ID must remain continuously
+	// visible to lock-free datapath lookups. Deleting and re-adding the key would
+	// create a real miss window even when the hash itself is concurrency-safe.
+	keep_id = nh->ref_count > 0 && nh->nh_id != GR_NH_ID_UNSET
+		&& nh->nh_id == base->nh_id;
+	if (!keep_id)
+		nexthop_id_put(nh);
 
 	// Copy base fields
 	nh->base = *base;
 
-	if ((ret = nexthop_id_get(nh)) < 0)
+	if (!keep_id && (ret = nexthop_id_get(nh)) < 0)
 		return ret;
 
 	if (nh->type == GR_NH_T_GROUP) {

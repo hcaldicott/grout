@@ -17,6 +17,7 @@
 #include <linux/neighbour.h>
 #include <zebra/rib.h>
 #include <zebra/table_manager.h>
+#include <zebra/zebra_nhg.h>
 #include <zebra_dplane_grout.h>
 
 static inline bool is_selfroute(gr_nh_origin_t origin) {
@@ -907,6 +908,12 @@ enum zebra_dplane_result grout_add_del_nexthop(struct zebra_dplane_ctx *ctx) {
 	if (!nh_id) {
 		// it's supported by grout, but not by the linux kernel
 		gr_log_err("no nh_id, skip");
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
+	if ((nh_id >> NHG_ID_TYPE_POS) != NHG_TYPE_L3) {
+		if (dplane_ctx_get_op(ctx) == DPLANE_OP_NH_DELETE)
+			return ZEBRA_DPLANE_REQUEST_SUCCESS;
+		gr_log_debug("L2 nexthop id %u is not implemented", nh_id);
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
 	}
 

@@ -5,7 +5,8 @@ source_hash = 300adb6ce35147e2cd98a4eb565c1dc1b8ed46509a269f8de24faed682daa6cf
 directory = frr-frr-10.6.2
 patch_directory = frr
 diff_files =
-	frr/10.5-zebra-route-IPv4-link-local-neighbor-updates-through.patch
+	frr/10.5-zebra-route-IPv4-link-local-neighbor-updates-through.patch,
+	frr/10.6-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch
 
 [provide]
 dependency_names = frr-10.6

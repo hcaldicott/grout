@@ -66,6 +66,28 @@ GR_IFACE_INFO(GR_IFACE_TYPE_VXLAN, iface_info_vxlan, {
 	struct l3_addr *flood_vteps;
 });
 
+// Return the immutable EVPN-MH policy for a bridge member. The pointer remains
+// valid until the current datapath RCU grace period completes.
+const struct gr_bridge_port_policy *bridge_port_policy_get(uint16_t iface_id);
+
+static inline bool bridge_port_policy_blocks_overlay(
+	const struct gr_bridge_port_policy *policy,
+	const struct l3_addr *src_vtep,
+	bool bum
+) {
+	if (policy == NULL || src_vtep->af == GR_AF_UNSPEC)
+		return false;
+
+	if (bum && (policy->flags & GR_BRIDGE_PORT_F_NON_DF))
+		return true;
+
+	for (uint8_t i = 0; i < policy->n_sph_filters; i++)
+		if (l3_addr_eq(src_vtep, &policy->sph_filters[i]))
+			return true;
+
+	return false;
+}
+
 struct iface *vxlan_get_iface(rte_be32_t vni, uint16_t encap_vrf_id);
 
 // Flood list type callbacks, registered per gr_flood_t.

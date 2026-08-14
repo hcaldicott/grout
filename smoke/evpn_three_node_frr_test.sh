@@ -26,10 +26,22 @@ hosts=("$prefix-h1" "$prefix-h2" "$prefix-h3")
 nodes=("$prefix-n1" "$prefix-n2" "$prefix-n3")
 grout_pids=()
 mh_enabled="${EVPN_MH_PROBE:-false}"
+underlay_ipv6="${EVPN_MH_IPV6:-false}"
 stress_cycles="${EVPN_MH_STRESS_CYCLES:-2}"
 failure_probe="${EVPN_MH_FAILURE_PROBE:-false}"
+provider_faults="${EVPN_MH_PROVIDER_FAULTS:-false}"
+storm_enabled="${EVPN_MH_STORM:-false}"
+storm_cycles="${EVPN_MH_STORM_CYCLES:-10}"
 failure_probe_ids=(268435457 268435458 268435459 268435460 \
 	536870913 536870914 536870915 536870916)
+if [ "$underlay_ipv6" = true ]; then
+	mh_enabled=true
+	vteps=(3fff::1 3fff::2 3fff::3)
+	underlay_prefix=64
+else
+	vteps=(172.16.0.1 172.16.0.2 172.16.0.3)
+	underlay_prefix=24
+fi
 
 fail() {
 	echo "FAIL: $*" >&2
@@ -177,11 +189,92 @@ remote_fdb_lacks_mac() {
 			>/dev/null
 }
 
+remote_carrier_path_ready() {
+	local fdb
+
+	fdb=$(grcli -s "$tmp/grout3.sock" -j fdb show 2>/dev/null) || return 1
+	nhg_id=$(printf '%s\n' "$fdb" | jq -r --arg mac "$carrier_mac" '
+		[.[] | select(.mac == $mac and .iface == "vxlan100" and .nhg != 0)][0].nhg // 0
+	')
+	[ "$nhg_id" -ne 0 ] && nhg_member_count_is "$tmp/grout3.sock" "$nhg_id" 2
+}
+
+carrier_reachable_from_remote() {
+	ip netns exec "${hosts[2]}" ping -c 1 -W 1 10.0.0.10 >/dev/null 2>&1
+}
+
+nexthop_absent() {
+	! grcli -s "$1" -j nexthop show id "$2" >/dev/null 2>&1
+}
+
+remote_carrier_graph_is_fail_closed() {
+	local fdb group_id member_id members
+
+	fdb=$(grcli -s "$tmp/grout3.sock" -j fdb show 2>/dev/null) || return 1
+	group_id=$(printf '%s\n' "$fdb" | jq -r --arg mac "$carrier_mac" '
+		[.[] | select(.mac == $mac and .iface == "vxlan100")][0].nhg // 0
+	')
+	# Withdrawing the dependent FDB is the strictest safe response.
+	[ "$group_id" -eq 0 ] && return 0
+	# FDB programming deliberately accepts an unresolved NHG ID for replay
+	# ordering. The datapath resolves the ID per packet and drops if it is absent,
+	# so an unresolved reference is safe pending the next reconciliation.
+	if ! members=$(grcli -s "$tmp/grout3.sock" -j nexthop show id "$group_id" 2>/dev/null |
+		jq -r 'select(.type == "group") | .members[].id'); then
+		return 0
+	fi
+	for member_id in $members; do
+		grcli -s "$tmp/grout3.sock" -j nexthop show id "$member_id" 2>/dev/null |
+			jq -e '.type | ascii_downcase == "l2"' >/dev/null || return 1
+	done
+}
+
 frr_subscription_after_line() {
 	local logfile="$1"
 	local first_line="$2"
 
 	tail -n +"$first_line" "$logfile" | grep -q "GROUT:.*iface/ip events"
+}
+
+frr_daemon_restarted() {
+	local pidfile="$1"
+	local old_pid="$2"
+	local new_pid
+
+	[ -s "$pidfile" ] || return 1
+	new_pid=$(cat "$pidfile")
+	[ "$new_pid" != "$old_pid" ] && kill -0 "$new_pid" 2>/dev/null
+}
+
+restart_frr_daemon() {
+	local node="$1"
+	local daemon="$2"
+	local pidfile="$builddir/frr_install/var/run/frr/$node/$daemon.pid"
+	local old_pid
+
+	wait_until "$node $daemon pidfile" test -s "$pidfile"
+	old_pid=$(cat "$pidfile")
+	kill -9 "$old_pid"
+	wait_until "$node $daemon respawn" frr_daemon_restarted "$pidfile" "$old_pid"
+}
+
+arm_provider_fault() {
+	local node_index="$1"
+	local message="$2"
+	local object_id="$3"
+	local error="$4"
+	local delay_ms="$5"
+
+	printf '%s %s %s %s\n' "$message" "$object_id" "$error" "$delay_ms" \
+		>"$tmp/grout$node_index.fault"
+}
+
+log_after_line_has() {
+	local logfile="$1"
+	local first_line="$2"
+	local pattern="$3"
+
+	tail -n +"$first_line" "$logfile" | grep -q "$pattern"
 }
 
 evpn_mh_install_failure_logged() {
@@ -429,9 +522,11 @@ configure_mh_carrier() {
 
 	ip netns add "$carrier"
 	ip -n "$carrier" link set lo up
-	ip netns exec "$carrier" sysctl -qw \
-		net.ipv6.conf.all.disable_ipv6=1 \
-		net.ipv6.conf.default.disable_ipv6=1
+	if [ "$underlay_ipv6" != true ]; then
+		ip netns exec "$carrier" sysctl -qw \
+			net.ipv6.conf.all.disable_ipv6=1 \
+			net.ipv6.conf.default.disable_ipv6=1
+	fi
 	ip -n "$carrier" link add bond0 type bond mode 802.3ad \
 		lacp_active on lacp_rate fast xmit_hash_policy layer3+4
 
@@ -500,9 +595,9 @@ configure_mh_carrier() {
 	wait_until "remote type-4 Ethernet Segment route" \
 		sh -c "vtysh -N '${nodes[2]}' -c 'show bgp l2vpn evpn route type 4' | grep -qi '$esi'"
 	wait_until "PE1 DF bridge-port policy" \
-		bridge_port_policy_is "$tmp/grout1.sock" false 172.16.0.2
+		bridge_port_policy_is "$tmp/grout1.sock" false "${vteps[1]}"
 	wait_until "PE2 non-DF bridge-port policy" \
-		bridge_port_policy_is "$tmp/grout2.sock" true 172.16.0.1
+		bridge_port_policy_is "$tmp/grout2.sock" true "${vteps[0]}"
 
 	if [ "$failure_probe" = true ]; then
 		wait_until "FRR EVPN-MH L2 dataplane failure result" \
@@ -538,6 +633,9 @@ configure_mh_carrier() {
 	fi
 
 	ip -n "$carrier" address add 10.0.0.10/24 dev bond0
+	if [ "$underlay_ipv6" = true ]; then
+		ip -n "$carrier" address add fc00::10/64 dev bond0
+	fi
 
 	if ! ip netns exec "$carrier" ping -c 3 -W 2 10.0.0.4; then
 		echo "GAP: EVPN-MH control plane converged but carrier traffic failed" >&2
@@ -560,10 +658,11 @@ configure_mh_carrier() {
 		fail "remote all-active MAC NHG did not converge"
 	fi
 	l2_nhs=$(grcli -s "$tmp/grout3.sock" -j nexthop show type l2)
-	printf '%s\n' "$l2_nhs" | jq -e '
+	printf '%s\n' "$l2_nhs" | jq -e \
+		--arg pe1 "${vteps[0]}" --arg pe2 "${vteps[1]}" '
 		length == 2 and
-		any(.[]; .vtep == "172.16.0.1") and
-		any(.[]; .vtep == "172.16.0.2")
+		any(.[]; .vtep == $pe1) and
+		any(.[]; .vtep == $pe2)
 	' >/dev/null || fail "remote PE did not install both L2 VTEP nexthops"
 
 	remote_fdb=$(grcli -s "$tmp/grout3.sock" -j fdb show)
@@ -578,10 +677,21 @@ configure_mh_carrier() {
 	local capture_pid capture_file
 	capture_file="$tmp/evpn-mh-ecmp.capture"
 	ip netns exec "$fabric" timeout 3 tcpdump -l -nn -i any \
-		'src host 172.16.0.3 and udp dst port 4789' >"$capture_file" 2>/dev/null &
+		"src host ${vteps[2]} and udp dst port 4789" >"$capture_file" 2>/dev/null &
 	capture_pid=$!
 	sleep 0.2
-	ip netns exec "${hosts[2]}" python3 - <<-'PY'
+	if [ "$underlay_ipv6" = true ]; then
+		ip netns exec "${hosts[2]}" python3 - <<-'PY'
+		import socket
+
+		for port in range(20000, 20064):
+		    sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+		    sock.bind(("fc00::4", port))
+		    sock.sendto(b"evpn-mh-ipv6", ("fc00::10", 9000))
+		    sock.close()
+		PY
+	else
+		ip netns exec "${hosts[2]}" python3 - <<-'PY'
 	import socket
 
 	for port in range(20000, 20064):
@@ -590,11 +700,20 @@ configure_mh_carrier() {
 	    sock.sendto(b"evpn-mh", ("10.0.0.10", 9000))
 	    sock.close()
 	PY
+	fi
 	wait "$capture_pid" || true
-	grep -q '172\.16\.0\.3\.[0-9]* > 172\.16\.0\.1\.4789' "$capture_file" ||
+	grep -Fq "> ${vteps[0]}.4789" "$capture_file" ||
 		{ cat "$capture_file" >&2; fail "MAC ECMP did not select PE1"; }
-	grep -q '172\.16\.0\.3\.[0-9]* > 172\.16\.0\.2\.4789' "$capture_file" ||
+	grep -Fq "> ${vteps[1]}.4789" "$capture_file" ||
 		{ cat "$capture_file" >&2; fail "MAC ECMP did not select PE2"; }
+
+	if [ "$underlay_ipv6" = true ]; then
+		ip netns exec "${hosts[2]}" ping -6 -c 3 -W 2 fc00::10 ||
+			fail "IPv6 carrier traffic failed across the all-active Ethernet Segment"
+		echo "PASS: IPv6-underlay EVPN-MH installed two VTEPs, forwarded IPv6 VM" \
+			"traffic, and used both all-active PEs"
+		return
+	fi
 
 	capture_carrier_bum 0x88b5 1 0
 	vtysh -N "${nodes[1]}" <<-EOF
@@ -730,6 +849,128 @@ configure_mh_carrier() {
 
 	echo "PASS: EVPN-MH survived repeated and complete all-active withdrawal"
 
+	# The topology above is configured through vtysh at runtime. Persist every
+	# node before exercising WatchFRR's per-daemon crash recovery so a respawned
+	# daemon reads the same configuration as the process it replaces.
+	for index in 1 2 3; do
+		vtysh -N "${nodes[$((index - 1))]}" -c 'write memory' >/dev/null ||
+			fail "could not persist node $index before daemon restart testing"
+	done
+
+	# Exercise the daemon-specific paths that a complete frrinit stop/start
+	# cannot distinguish. WatchFRR may restart dependent clients after Zebra,
+	# but the initiating failure and provider reconnection remain specific.
+	restart_frr_daemon "${nodes[2]}" bgpd
+	for index in 1 2 3; do
+		wait_evpn_peers "${nodes[$((index - 1))]}"
+	done
+	wait_until "remote FDB/NHG graph after bgpd-only restart" \
+		remote_carrier_path_ready
+	wait_until "carrier reachability after bgpd-only restart" \
+		carrier_reachable_from_remote
+	ip netns exec "${hosts[2]}" ping -c 2 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after bgpd-only restart"
+	echo "PASS: bgpd-only restart reconciled EVPN-MH state"
+
+	local daemon_log="$tmp/${nodes[2]}.log"
+	local daemon_log_line=$(( $(wc -l < "$daemon_log") + 1 ))
+	restart_frr_daemon "${nodes[2]}" zebra
+	wait_until "remote PE provider subscription after Zebra-only restart" \
+		frr_subscription_after_line "$daemon_log" "$daemon_log_line"
+	for index in 1 2 3; do
+		wait_evpn_peers "${nodes[$((index - 1))]}"
+	done
+	wait_until "remote FDB/NHG graph after Zebra-only restart" \
+		remote_carrier_path_ready
+	wait_until "carrier reachability after Zebra-only restart" \
+		carrier_reachable_from_remote
+	ip netns exec "${hosts[2]}" ping -c 2 -W 2 10.0.0.10 ||
+		fail "carrier traffic failed after Zebra-only restart"
+	echo "PASS: Zebra-only restart resubscribed and reconciled EVPN-MH state"
+
+	if [ "$provider_faults" = true ]; then
+		local fault_l2_id fault_pidfile fault_old_pid
+		fault_l2_id=$(grcli -s "$tmp/grout3.sock" -j nexthop show type l2 |
+			jq -r '[.[] | select(.vtep == "172.16.0.1")][0].id // 0')
+		[ "$fault_l2_id" -ne 0 ] || fail "could not select L2 nexthop for replay fault"
+
+		# Arm a one-shot 200 ms ETIMEDOUT for this object, crash Zebra and
+		# remove the object during WatchFRR's restart interval. The first replay
+		# must fail closed: either it retains a valid degraded graph or withdraws
+		# the dependent FDB. The next clean replay must repair the complete graph.
+		arm_provider_fault 3 GR_NH_ADD "$fault_l2_id" 110 200
+		fault_pidfile="$builddir/frr_install/var/run/frr/${nodes[2]}/zebra.pid"
+		fault_old_pid=$(cat "$fault_pidfile")
+		daemon_log_line=$(( $(wc -l < "$daemon_log") + 1 ))
+		kill -9 "$fault_old_pid"
+		grcli -s "$tmp/grout3.sock" nexthop del "$fault_l2_id"
+		wait_until "faulted Zebra respawn" \
+			frr_daemon_restarted "$fault_pidfile" "$fault_old_pid"
+		wait_until "provider timeout fault" log_after_line_has "$daemon_log" \
+			"$daemon_log_line" \
+			"fault injection: GR_NH_ADD object $fault_l2_id: Connection timed out"
+		wait_until "typed-L2 timeout result" log_after_line_has "$daemon_log" \
+			"$daemon_log_line" \
+			"Failed to install EVPN-MH L2 nexthop ID ($fault_l2_id)"
+		for index in 1 2 3; do
+			wait_evpn_peers "${nodes[$((index - 1))]}"
+		done
+		wait_until "timed-out L2 nexthop to remain absent" \
+			nexthop_absent "$tmp/grout3.sock" "$fault_l2_id"
+		remote_carrier_graph_is_fail_closed ||
+			fail "partial replay left a dangling carrier FDB/NHG graph"
+		if remote_carrier_path_ready; then
+			carrier_reachable_from_remote ||
+				fail "valid degraded graph did not forward through the surviving PE"
+		fi
+
+		restart_frr_daemon "${nodes[2]}" zebra
+		for index in 1 2 3; do
+			wait_evpn_peers "${nodes[$((index - 1))]}"
+		done
+		wait_until "two-member FDB/NHG graph after clean replay" \
+			remote_carrier_path_ready
+		wait_until "carrier reachability after partial replay repair" \
+			carrier_reachable_from_remote
+		ip netns exec "${hosts[2]}" ping -c 2 -W 2 10.0.0.10 ||
+			fail "carrier traffic failed after partial replay repair"
+		echo "PASS: provider timeout failed closed and a clean replay repaired partial state"
+	fi
+
+	if [ "$storm_enabled" = true ]; then
+		local daemon
+		for cycle in $(seq 1 "$storm_cycles"); do
+			if [ $((cycle % 2)) -eq 0 ]; then
+				daemon=zebra
+			else
+				daemon=bgpd
+			fi
+			restart_frr_daemon "${nodes[2]}" "$daemon"
+			for index in 1 2 3; do
+				wait_evpn_peers "${nodes[$((index - 1))]}"
+			done
+			wait_until "storm $cycle FDB/NHG graph after $daemon restart" \
+				remote_carrier_path_ready
+			wait_until "storm $cycle reachability after $daemon restart" \
+				carrier_reachable_from_remote
+
+			ip -n "$fabric" link set x-u1 down
+			wait_until "storm $cycle PE1 protodown" \
+				grout_carrier_member_state "$tmp/grout1.sock" true false
+			wait_until "storm $cycle surviving remote VTEP" \
+				nhg_only_vtep_is "$tmp/grout3.sock" "$nhg_id" 172.16.0.2
+			ip netns exec "${hosts[2]}" ping -c 1 -W 2 10.0.0.10 ||
+				fail "carrier traffic failed in restart/failure storm $cycle"
+			ip -n "$fabric" link set x-u1 up
+			wait_evpn_peers "${nodes[0]}"
+			wait_until "storm $cycle PE1 recovery" \
+				grout_carrier_member_state "$tmp/grout1.sock" false true
+			wait_until "storm $cycle restored NHG" \
+				remote_carrier_path_ready
+		done
+		echo "PASS: $storm_cycles alternating daemon restart and underlay failure cycles"
+	fi
+
 	# Persist and restart the complete FRR stack on the remote VM host while
 	# Grout keeps forwarding state. The provider must reconnect, replay the
 	# interface/VNI state and converge on the same two-member L2 NHG.
@@ -848,13 +1089,14 @@ start_frr() {
 	vtysh_enable=yes
 	frr_global_options="-A 127.0.0.1 --log file:$logfile"
 	zebra_options="-s 90000000 -M dplane_grout"
-	watchfrr_options="--netns=$node"
+	watchfrr_options="--netns=$node --min-restart-interval=1"
 	EOF
 	cat >"$confdir/frr.conf" <<-EOF
 	hostname node$index
 	EOF
 
-	GROUT_SOCK_PATH="$sock" frrinit.sh start "$node" >/dev/null
+	GROUT_SOCK_PATH="$sock" GROUT_DPLANE_FAULT_FILE="$tmp/grout$index.fault" \
+		frrinit.sh start "$node" >/dev/null
 	wait_until "FRR node $index Grout subscription" \
 		grep -q "GROUT:.*iface/ip events" "$logfile"
 }
@@ -864,6 +1106,11 @@ configure_underlay() {
 	local node="${nodes[$((index - 1))]}"
 	local sock="$tmp/grout$index.sock"
 	local tap="x-u$index"
+	local address_command=ip
+
+	if [ "$underlay_ipv6" = true ]; then
+		address_command=ipv6
+	fi
 
 	grcli -s "$sock" interface add port underlay \
 		devargs "net_tap0,iface=$tap"
@@ -881,7 +1128,7 @@ configure_underlay() {
 	vtysh -N "$node" <<-EOF
 	configure terminal
 	interface underlay
-	 ip address 172.16.0.$index/24
+	 $address_command address ${vteps[$((index - 1))]}/$underlay_prefix
 	exit
 	EOF
 }
@@ -889,16 +1136,18 @@ configure_underlay() {
 configure_bgp() {
 	local index="$1"
 	local node="${nodes[$((index - 1))]}"
-	local peer1 peer2 timer1 timer2
+	local peer1 peer2 peer1_addr peer2_addr timer1 timer2
 
 	case "$index" in
 	1) peer1=2; peer2=3 ;;
 	2) peer1=1; peer2=3 ;;
 	3) peer1=1; peer2=2 ;;
 	esac
+	peer1_addr="${vteps[$((peer1 - 1))]}"
+	peer2_addr="${vteps[$((peer2 - 1))]}"
 	if [ "$mh_enabled" = true ]; then
-		timer1=" neighbor 172.16.0.$peer1 timers 1 3"
-		timer2=" neighbor 172.16.0.$peer2 timers 1 3"
+		timer1=" neighbor $peer1_addr timers 1 3"
+		timer2=" neighbor $peer2_addr timers 1 3"
 	fi
 
 	vtysh -N "$node" <<-EOF
@@ -906,13 +1155,14 @@ configure_bgp() {
 	router bgp 65000
 	 bgp router-id 172.16.0.$index
 	 no bgp default ipv4-unicast
-	 neighbor 172.16.0.$peer1 remote-as 65000
+	 no bgp default ipv6-unicast
+	 neighbor $peer1_addr remote-as 65000
 	$timer1
-	 neighbor 172.16.0.$peer2 remote-as 65000
+	 neighbor $peer2_addr remote-as 65000
 	$timer2
 	 address-family l2vpn evpn
-	  neighbor 172.16.0.$peer1 activate
-	  neighbor 172.16.0.$peer2 activate
+	  neighbor $peer1_addr activate
+	  neighbor $peer2_addr activate
 	  advertise-all-vni
 	 exit-address-family
 	EOF
@@ -951,7 +1201,7 @@ configure_overlay() {
 		sh -c "vtysh -N '$node' -c 'show evpn' | grep -q 'L2 VNIs'"
 	grcli -s "$sock" interface add bridge br100
 	grcli -s "$sock" interface add vxlan vxlan100 vni 100 \
-		local "172.16.0.$index" domain br100
+		local "${vteps[$((index - 1))]}" domain br100
 	wait_until "node $index VNI 100" \
 		sh -c "vtysh -N '$node' -c 'show evpn vni 100' | grep -q 'VNI: 100'"
 	grcli -s "$sock" interface add port access \
@@ -963,6 +1213,9 @@ configure_overlay() {
 	ip -n "$node" link set "$tap" netns "$host"
 	ip -n "$host" link set "$tap" up
 	ip -n "$host" addr add "10.0.0.$((index + 1))/24" dev "$tap"
+	if [ "$underlay_ipv6" = true ]; then
+		ip -n "$host" addr add "fc00::$((index + 1))/64" dev "$tap"
+	fi
 }
 
 for index in 1 2 3; do
@@ -974,7 +1227,7 @@ for index in 1 2 3; do
 	for peer in 1 2 3; do
 		if [ "$peer" -ne "$index" ]; then
 			if ! grcli -s "$tmp/grout$index.sock" \
-					ping "172.16.0.$peer" count 1 delay 10; then
+					ping "${vteps[$((peer - 1))]}" count 1 delay 10; then
 				dump_diagnostics
 				exit 1
 			fi

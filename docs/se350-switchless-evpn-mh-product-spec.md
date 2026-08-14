@@ -1174,7 +1174,7 @@ Remaining work:
 
 - policy cleanup when a member or bridge is deleted first;
 - ES recreation and repeated replay/delete cycles;
-- IPv6 VTEP functional coverage;
+- wider IPv6 failure/restart coverage beyond the passing base all-active path;
 - capacity behavior if FRR supplies more than the current bounded filter count;
 - provenance-aware transit if distributed ES egress is added.
 
@@ -1323,6 +1323,7 @@ live migration.
 | Datapath concurrency hardening | Pass | Nexthop-ID lookups use DPDK lock-free read/write concurrency with QSBR reclamation; NHG replacements publish one immutable state; mixed or forwarding-class-changing groups are rejected. |
 | Fragment path affinity | Pass | IPv4 DF packets retain L4 hashing while every fragment, including the MF-marked first fragment, uses the same L3 hash. |
 | Remote MAC ECMP | Prototype pass | 64 UDP flows use both remote PEs. |
+| IPv6 EVPN-MH | Prototype pass | IPv6 BGP/VXLAN endpoints exchange multihoming routes; IPv6 guest traffic and two-PE ECMP pass in the namespace lab. |
 | Member withdrawal/recovery | Prototype pass | Remote NHG collapses to one member and restores. |
 | DF preference change | Prototype pass | BUM egress follows live DF change. |
 | Split horizon | Prototype pass | Injected peer-VTEP traffic is suppressed toward ES. |
@@ -1330,8 +1331,8 @@ live migration.
 | Pre-ES MAC reconciliation | Prototype pass | Stale local entry is flushed and remote two-member NHG forms. |
 | Uplink/protodown | Prototype pass | Fabric loss drives FRR member protodown without physical carrier link-down; ordinary data is suppressed, LACP continues, the remote NHG shrinks, traffic survives and recovery restores both members. |
 | Bridge-port lifecycle | Unit, restart and ES-removal pass | Desired policy is retained before bridge readiness, replayed after a carrier-facing FRR restart, and deleted from active/pending state when FRR removes the ES. LACP remains synchronized. |
-| FRR provider rejection | Prototype pass | A forced typed-ID/type collision is reported for install and conditional delete; Zebra stays healthy with established EVPN sessions and Grout preserves the existing objects. |
-| FRR stack restart | Prototype pass | Remote and carrier-facing stop/start recover provider subscription, EVPN peers, NHG/policy state and traffic. Zebra-only phased restart storms remain. |
+| FRR provider failure | Prototype pass | Typed-ID rejection and an injected replay timeout are reported; partial state fails closed and a clean replay repairs the complete graph. |
+| FRR daemon/stack restart | Prototype pass | bgpd-only, Zebra-triggered dependency restart, and remote/carrier-facing stop/start recover provider subscription, peers, FDB/NHG or policy state and traffic. |
 | VM vhost attachment | Not tested | Driver is compiled; product lifecycle absent. |
 | Live migration | Not tested | No QEMU/OpenNebula migration lab yet. |
 | Any-host 20 Gb/s | Not proven | Remote-host path distribution passes; local-bias case remains. |
@@ -1343,7 +1344,7 @@ live migration.
 | --- | --- |
 | Development evidence | `docs/evpn-mh-development.md` |
 | AlmaLinux build environment | `devtools/alma9.sh`, `devtools/alma9/Containerfile`, `devtools/alma9/README.md` |
-| Three-node functional lab | `smoke/evpn_three_node_frr_test.sh` |
+| Three-node functional lab | `smoke/evpn_three_node_frr_test.sh`, `smoke/evpn_three_node_frr_ipv6_test.sh` |
 | Split-chassis LACP probe | `smoke/evpn_mh_lacp_test.sh` |
 | FRR interface/VLAN representation | `frr/if_grout.c` |
 | FRR route/FDB/NHG translation | `frr/rt_grout.c` |
@@ -1387,8 +1388,9 @@ Exit criteria:
 ### Tranche B: implement safe protodown and failure convergence
 
 Status: functional prototype passes the direct split-LACP, repeated protodown,
-complete withdrawal/recreation, FRR-stack restart and three-node fabric/carrier
-failure tests; long-duration/compound stress and upstream-quality unit coverage
+complete withdrawal/recreation, daemon/full-stack restart and three-node
+fabric/carrier failure tests. A 10-cycle compound restart/failure storm is a
+development gate; release-duration stress and upstream-quality unit coverage
 remain.
 
 Deliverables:
@@ -1412,8 +1414,8 @@ Exit criteria:
 
 Deliverables:
 
-1. namespace-aware phased FRR restart wrapper;
-2. Zebra-only, bgpd-only, FRR-stack and Grout restart tests;
+1. maintain the namespace-aware WatchFRR restart helper;
+2. retain bgpd-only, Zebra dependency and FRR-stack tests and add Grout restart;
 3. dependency-ordered replay assertions;
 4. cleanup behavior for deleted bridges, groups and ES policy;
 5. restart storm/backoff test.

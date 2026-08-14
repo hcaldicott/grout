@@ -26,6 +26,10 @@
 #include <zebra/zebra_vrf.h>
 #include <zebra_dplane_grout.h>
 
+#include <limits.h>
+#include <stdio.h>
+#include <unistd.h>
+
 #define TOSTRING(x) #x
 
 static const char *gr_sock_path = GR_DEFAULT_SOCK_PATH;
@@ -94,6 +98,65 @@ static void grout_reconnect_finish(void);
 static void grout_main_router_started(void);
 static void grout_sync_cleanup_marker(void);
 static void grout_sync_inject_marker(void);
+
+// One-shot integration-test fault hook. It is inert unless an administrator
+// supplies GROUT_DPLANE_FAULT_FILE. The file contains:
+//   GR_API_MESSAGE_NAME object-id-or-zero errno delay-ms
+static bool grout_fault_inject(
+	uint32_t req_type,
+	size_t tx_len,
+	const void *tx_data
+) {
+	const char *path = getenv("GROUT_DPLANE_FAULT_FILE");
+	char claim[PATH_MAX], message[64];
+	uint32_t object_id = 0, expected_id;
+	int error, delay_ms;
+	FILE *file;
+
+	if (path == NULL || path[0] == '\0')
+		return false;
+	if (snprintf(claim, sizeof(claim), "%s.claim.%ld", path, (long)getpid())
+	    >= (int)sizeof(claim))
+		return false;
+	if (rename(path, claim) < 0)
+		return false;
+
+	file = fopen(claim, "r");
+	if (file == NULL) {
+		rename(claim, path);
+		return false;
+	}
+	if (fscanf(file, "%63s %u %d %d", message, &expected_id, &error, &delay_ms) != 4) {
+		fclose(file);
+		rename(claim, path);
+		return false;
+	}
+	fclose(file);
+
+	if (req_type == GR_NH_ADD && tx_len >= sizeof(struct gr_nh_add_req))
+		object_id = ((const struct gr_nh_add_req *)tx_data)->nh.nh_id;
+	else if (req_type == GR_NH_DEL && tx_len >= sizeof(struct gr_nh_del_req))
+		object_id = ((const struct gr_nh_del_req *)tx_data)->nh_id;
+
+	if (strcmp(message, gr_api_message_name(req_type)) != 0
+	    || (expected_id != 0 && expected_id != object_id) || error <= 0
+	    || delay_ms < 0 || delay_ms > 5000) {
+		rename(claim, path);
+		return false;
+	}
+
+	unlink(claim);
+	if (delay_ms != 0)
+		usleep((useconds_t)delay_ms * 1000);
+	errno = error;
+	gr_log_err(
+		"fault injection: %s object %u: %s",
+		message,
+		object_id,
+		strerror(errno)
+	);
+	return true;
+}
 
 void ipaddr_to_l3_addr(struct l3_addr *dst, const struct ipaddr *src) {
 	switch (src->ipa_type) {
@@ -746,6 +809,8 @@ int grout_client_send_recv(uint32_t req_type, size_t tx_len, const void *tx_data
 
 	if (grout_ctx.client == NULL)
 		return errno_set(ENOTCONN);
+	if (grout_fault_inject(req_type, tx_len, tx_data))
+		return -1;
 
 	ret = gr_api_client_send_recv(grout_ctx.client, req_type, tx_len, tx_data, rx_data);
 	if (ret == 0) {

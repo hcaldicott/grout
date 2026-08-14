@@ -35,8 +35,8 @@ This backlog complements:
 | ID | Gap | Priority | Status | Production impact |
 | --- | --- | --- | --- | --- |
 | HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Deferred for architecture | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
-| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with direct and provider-failure smoke coverage | Core ordering/type invariants and rejected provider installs/deletes pass; timeouts and partial replay remain. |
-| RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype with stack-restart coverage | Remote and carrier-facing FRR stack replay passes; daemon-specific restart storms remain. |
+| LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with timeout/partial-replay smoke coverage | Ordering/type invariants, rejection, timeout, fail-closed partial state and repair pass; sanitizer and broader concurrent replacement stress remain. |
+| RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype with daemon and stack-restart coverage | bgpd-only, Zebra dependency restart, and both full-stack replay cases pass; Grout restart and release-duration storms remain. |
 | FRR-001 | Upstream FRR dataplane abstraction changes | P0 | Prototype | The project carries an FRR 10.6.1 fork and rebase burden. |
 | MIG-001 | Migration-compatible VM attachment | P0 | Open | Seamless migration cannot be claimed until vhost-user reconnect and switchover are validated. |
 | VLAN-001 | General bridge-domain/VLAN representation | P1 | Constrained | The current single synthetic VLAN is safe but cannot represent general tagged services. |
@@ -249,8 +249,10 @@ objects. This forces Grout to reject the provider update on a forwarding-class
 mismatch. Zebra reports asynchronous install and delete failures, remains
 responsive with both EVPN peers established, and does not replace, corrupt or
 delete the existing objects. FRR uses atomic type/origin-conditional deletes so
-a rejected install cannot later remove the conflicting object's owner. Provider
-timeout and partial-replay injection remain.
+a rejected install cannot later remove the conflicting object's owner. The
+harness also injects a one-shot `ETIMEDOUT` during Zebra replay, verifies that
+unresolved FDB/NHG state is fail-closed, and proves a subsequent clean replay
+repairs the two-member graph without static entries.
 
 #### Acceptance tests
 
@@ -304,7 +306,7 @@ fork surface.
 
 ### RESTART-001: make daemon restart a gating scenario
 
-**Status:** Prototype/harness gap
+**Status:** Prototype tested; release qualification remains
 
 **Priority:** P0
 
@@ -314,26 +316,24 @@ deactivated while detached and cleared on removal. An empty FRR update deletes
 both active and desired state, including policy queued before interface
 readiness. Unit tests cover these ordering and non-resurrection rules.
 
-The remaining gap is end-to-end restart and replay behavior. The current
-namespace-local FRR launcher cannot reliably reproduce WatchFRR's phased
-dependency restart and integrated configuration replay.
+The three-node harness persists configuration and uses namespace-aware
+WatchFRR process control to crash and respawn individual daemons. It exercises
+bgpd-only restart and a Zebra-initiated dependency restart, requiring live
+FDB-to-NHG reconstruction and carrier reachability after each case.
 
-The three-node harness now persists and fully restarts FRR on both the remote
+It also fully restarts FRR on both the remote
 VM-facing PE and a carrier-facing PE. It verifies provider resubscription, BGP
 EVPN peer recovery, remote L2 NHG state, carrier bridge-port policy, LACP state
 and end-to-end reachability. It also removes the ES on both carrier PEs and
-verifies that policy disappears while LACP remains synchronized. This closes
-full-stack stop/start and ES-policy removal coverage, but does not yet replace
-the daemon-specific and restart-storm work below.
+verifies that policy disappears while LACP remains synchronized.
 
 #### Remaining work
 
-- Add a namespace-aware phased FRR restart wrapper.
-- Exercise Zebra-only, bgpd-only, full FRR stack and Grout restarts.
+- Exercise Grout restart and process-loss ordering.
 - Add interface/bridge deletion-first, ES recreate and replay-order smoke tests.
 - Verify FDB, L2 NH/NHG, DF policy, split-horizon filters and protodown state
   reconcile in dependency order.
-- Run restart storms with bounded backoff and at least 50 cycles for release
+- Promote the 10-cycle development storm to at least 50 cycles for release
   qualification.
 - Measure packet loss, duplicate delivery and convergence time during each
   restart class.

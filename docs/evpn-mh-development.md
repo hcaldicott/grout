@@ -38,13 +38,14 @@ dataplane development; it does not represent physical NIC performance.
 | Datapath/NHG concurrency | Pass | Nexthop ID hashing is concurrent-reader/writer safe; live group replacements publish an immutable state and pass traffic-churn smoke coverage. |
 | IPv4 fragment affinity | Pass | DF-only packets use L4 ports; first and later fragments share the L3-only hash. |
 | MAC ECMP | Prototype pass | The remote carrier MAC references an L2 NHG; 64 UDP flows use both remote PEs and retain connectivity when one member is withdrawn. |
+| IPv6 EVPN-MH | Prototype pass | Three IPv6 BGP/VXLAN endpoints exchange Type-1/Type-4 routes; IPv6 guest traffic crosses the carrier ES and 64 flows use both IPv6 VTEPs. |
 | DF and split-horizon enforcement | Prototype pass | The provider consumes `DPLANE_OP_BR_PORT_UPDATE`; Grout atomically applies non-DF, backup-NHG and peer-VTEP state. BUM DF gating, a live DF preference change, peer-VTEP filtering and local-bias redirect pass in the three-node lab. |
 | L2 NH/NHG lifecycle | Smoke pass | Missing dependencies fail closed; forced member deletion preserves a typed group; nested/class-changing updates are rejected; delete/recreate and ID reuse complete cleanly. |
 | Bridge-port ordering | Unit and restart pass | Policy can arrive before bridge readiness, becomes active on interface reconciliation and is replayed after a carrier-facing FRR stack restart. |
 | Uplink tracking/protodown | Prototype pass | FRR `DPLANE_OP_INTF_UPDATE` drives explicit Grout LACP-member protodown. Ordinary ingress and egress are suppressed, LACP remains live, remote NHGs withdraw, and both the carrier member and NHG recover in the three-node lab. |
 | Startup MAC reconciliation | Prototype pass | FRR now flushes interface-linked local MACs when an ES is attached or detached. The lab deliberately learns the carrier MAC before ES configuration, verifies the stale entry is removed, and then obtains the two-member remote MAC NHG without static FDB entries. |
-| FRR provider failure result | Prototype pass | The three-node lab forces typed L2 IDs to collide with existing L3 objects. Grout rejects install and conditional delete operations, Zebra logs both asynchronous failures without crashing, EVPN sessions remain established and the existing objects remain intact. |
-| FRR stack restart | Prototype pass | Full stop/start on both the remote VM PE and a carrier-facing PE resubscribes the provider, restores EVPN peers, L2 NHG state, bridge policy and carrier reachability. Zebra-only graceful-restart coverage remains. |
+| FRR provider failure result | Prototype pass | The lab covers typed-ID rejection plus a one-shot provider timeout during replay. Partial state fails closed, Zebra reports the error, and a clean replay restores the complete FDB/NHG graph. |
+| FRR daemon/stack restart | Prototype pass | bgpd-only, Zebra-triggered dependency restart, and full stop/start on remote and carrier-facing PEs restore EVPN peers, provider subscription, FDB/NHG state, bridge policy and reachability. |
 | Live migration | Untested | Requires the completed all-active dataplane and a migration-compatible VM attachment, normally vhost-user rather than a directly assigned VF. |
 
 FRR 10.6.1 already calculates the EVPN-MH control-plane state. The bundled
@@ -101,8 +102,9 @@ The working prototype reuses ordinary `DPLANE_OP_NH_*`, preserves FRR's
 L2-typed IDs, and adds `NHA_FDB` in the Linux encoder. It deliberately avoids a
 Grout-only callback inside FRR. Before proposing it upstream, add focused FRR
 tests for IPv4 and IPv6 VTEPs, groups, deletes and the Linux netlink encoding.
-The Grout integration harness now covers rejected typed-L2 install and delete
-results; transport timeouts and an FRR-native mock-provider topotest remain.
+The Grout integration harness now covers rejected typed-L2 install/delete
+results and a timed-out L2 install during partial replay. An FRR-native
+mock-provider topotest and superseded-operation coverage remain.
 
 Acceptance criteria:
 
@@ -176,8 +178,9 @@ Acceptance criteria:
 
 ### 5. Uplink tracking and failure convergence
 
-Status: prototype tested; repeated protodown and full FRR-stack restart coverage
-pass, while daemon-specific restart storms and physical-carrier stress remain.
+Status: prototype tested; repeated protodown, daemon-specific restart and full
+FRR-stack restart coverage pass. Release-duration storms, convergence metrics
+and physical-carrier stress remain.
 
 Implement the interface-state part of `DPLANE_OP_INTF_UPDATE` needed by FRR
 EVPN-MH. Map protodown and uplink state to Grout bond forwarding state without

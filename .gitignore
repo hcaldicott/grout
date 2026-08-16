@@ -17,6 +17,7 @@
 /debian/grout-dev/
 /debian/grout/
 /debian/tmp/
+/dist/
 /redhat-linux-build
 /subprojects/dpdk-*
 /subprojects/libecoli-*

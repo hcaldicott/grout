@@ -67,6 +67,11 @@ if systemd_dep.found()
     pkgconfig: 'systemdsystemunitdir',
     pkgconfig_define: ['prefix', get_option('prefix')]
   )
+  test(
+    'frr-systemd-dropin',
+    find_program('sh'),
+    args: [files('grout_conf_test.sh'), files('grout.conf')],
+  )
   install_data(
     files('grout.conf'),
     install_dir: systemd_system_unit_dir / 'frr.service.d',

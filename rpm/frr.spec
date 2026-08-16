@@ -3,9 +3,14 @@
 
 %global frr_libdir %{_libexecdir}/frr
 
+# FRR's large libtool links can make GCC's default -flto=auto wrapper lose the
+# inherited make jobserver descriptors in constrained OBS workers. Preserve
+# LTO while using one deterministic LTRANS worker instead of the jobserver.
 %global _hardened_build 1
+%global _lto_cflags -flto=1 -ffat-lto-objects
 %global selinuxtype targeted
 %define _legacy_common_support 1
+%{!?version:%global version 10.6.1}
 
 Name: frr
 Version: %{version}
@@ -15,13 +20,17 @@ License: GPL-2.0-or-later AND ISC AND LGPL-2.0-or-later AND BSD-2-Clause AND BSD
 URL: http://www.frrouting.org
 Source0: %{name}-%{version}.tar.gz
 Patch0: zebra-route-IPv4-link-local-neighbor-updates-through.patch
+Patch1: zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch
+Patch2: zebra-reconcile-EVPN-MH-interface-MACs.patch
 
 BuildRequires: autoconf
 BuildRequires: automake
 BuildRequires: bison >= 2.7
 BuildRequires: flex
 BuildRequires: gcc
+BuildRequires: gcc-c++
 BuildRequires: groff
+BuildRequires: elfutils-libelf-devel
 BuildRequires: json-c-devel
 BuildRequires: libcap-devel
 BuildRequires: libtool
@@ -30,6 +39,7 @@ BuildRequires: libyang-devel >= 2.1.128
 BuildRequires: make
 BuildRequires: ncurses
 BuildRequires: ncurses-devel
+BuildRequires: openssl-devel
 BuildRequires: pam-devel
 BuildRequires: patch
 BuildRequires: pcre2-devel
@@ -71,6 +81,15 @@ Build headers for FRR required to generate out of tree dplane plugins
 %autosetup -n %{name}-%{name}-%{version} -p1
 
 %build
+# FRR 10.6.1 trips a GCC 15/annobin LTO ICE when built with GCC Toolset 15,
+# which build environments may put first in PATH for Grout. OBS normally
+# builds FRR with the EL9 system compiler. Pin FRR to that compiler so local
+# source-package validation and OBS use the same supported toolchain.
+%if 0%{?rhel} == 9
+export PATH=/usr/bin:/usr/sbin:$PATH
+export CC=/usr/bin/gcc
+export CXX=/usr/bin/g++
+%endif
 export CFLAGS="%{optflags} -DINET_NTOP_NO_OVERRIDE"
 autoreconf -ivf
 
@@ -95,7 +114,10 @@ autoreconf -ivf
 	--enable-group=frr \
 	--enable-vty-group=frr
 
-%make_build PYTHON=%{__python3}
+# GCC's LTO wrapper inherits GNU make's jobserver through libtool. FRR's
+# nested libtool links can close those descriptors before lto-wrapper uses
+# them, so run this control-plane package serially while retaining LTO.
+%make_build -j1 PYTHON=%{__python3}
 
 %install
 %make_install

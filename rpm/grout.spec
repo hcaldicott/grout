@@ -7,6 +7,11 @@
 %bcond_without frr
 %bcond_with download
 
+# OBS builds do not inject the GNUmakefile's version/release macros. Keep
+# explicit snapshot defaults while allowing local `make rpm` to override them.
+%{!?version:%global version 0.16.3}
+%{!?release:%global release 0.1.evpnmh.g38e00bd9%{?dist}}
+
 %define dpdk_cpu generic
 %ifarch x86_64
 %if 0%{?rhel} >= 9
@@ -27,13 +32,18 @@
 Name: grout
 Summary: Graph router based on DPDK
 Group: System Environment/Daemons
-URL: https://github.com/DPDK/grout
+URL: https://github.com/hcaldicott/grout
 License: BSD-3-Clause AND GPL-2.0-or-later
 Version: %{version}
 Release: %{release}
-Source0: https://github.com/DPDK/grout/archive/%{branch}.tar.gz#/%{name}-%{version}-%{release}.tar.gz
+Source0: %{name}-%{version}.tar.gz
 
 BuildRequires: gcc
+%if 0%{?rhel} == 9
+BuildRequires: gcc-toolset-15-gcc
+BuildRequires: gcc-toolset-15-gcc-c++
+BuildRequires: gcc-toolset-15-gcc-plugin-annobin
+%endif
 %if %{with download}
 BuildRequires: git
 %endif
@@ -41,6 +51,8 @@ BuildRequires: git
 BuildRequires: scdoc
 %endif
 BuildRequires: libarchive-devel
+BuildRequires: libbpf-devel
+BuildRequires: elfutils-libelf-devel
 %if %{with tests}
 BuildRequires: libcmocka-devel
 %endif
@@ -50,6 +62,7 @@ BuildRequires: libmnl-devel
 BuildRequires: meson
 BuildRequires: ninja-build
 BuildRequires: numactl-devel
+BuildRequires: openssl-devel
 BuildRequires: pkgconf
 BuildRequires: python3-pyelftools
 BuildRequires: rdma-core-devel
@@ -58,6 +71,8 @@ BuildRequires: frr-headers >= 10.5
 %endif
 %if %{with systemd}
 BuildRequires: systemd
+BuildRequires: systemd-devel
+BuildRequires: systemd-rpm-macros
 %endif
 
 Requires: less
@@ -77,10 +92,6 @@ It comes with a client library to configure it over a standard UNIX socket and
 a CLI that uses that library. The CLI can be used as an interactive shell, but
 also in scripts one command at a time, or by batches.
 
-%if %{undefined fedora}
-%debug_package
-%endif
-
 %package headers
 Summary: Development headers for building grout API clients
 BuildArch: noarch
@@ -98,7 +109,16 @@ Requires: frr = %(rpm -q --qf '%%{version}-%%{release}' frr-headers)
 FRR dplane plugin for grout
 %endif
 
+%prep
+%autosetup -n %{name}-%{version}
+
 %build
+%if 0%{?rhel} == 9
+export PATH=/opt/rh/gcc-toolset-15/root/usr/bin:$PATH
+export CC=/opt/rh/gcc-toolset-15/root/usr/bin/gcc
+export CXX=/opt/rh/gcc-toolset-15/root/usr/bin/g++
+%endif
+export GROUT_VERSION="%{version}-%{release}"
 %meson \
 %if %{with tests}
 	-Dtests=enabled \

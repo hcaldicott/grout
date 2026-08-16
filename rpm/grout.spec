@@ -141,6 +141,11 @@ export GROUT_VERSION="%{version}-%{release}"
 
 %meson_build
 
+%check
+%if %{with tests}
+%meson_test
+%endif
+
 %install
 %meson_install --skip-subprojects
 %if %{without systemd}

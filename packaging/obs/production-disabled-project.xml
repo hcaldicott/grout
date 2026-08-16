@@ -5,6 +5,9 @@
   <publish>
     <disable/>
   </publish>
+  <build>
+    <disable/>
+  </build>
   <repository name="AlmaLinux_9">
     <path project="LINSTOR:OpenNebula:AlmaLinux9.8" repository="standard"/>
     <arch>x86_64</arch>

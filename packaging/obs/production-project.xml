@@ -2,6 +2,9 @@
   <title>Grout EVPN-MH packages</title>
   <description>Signed production Grout EVPN-MH and patched FRR packages for AlmaLinux 9 x86_64.</description>
   <person userid="Admin" role="maintainer"/>
+  <build>
+    <disable/>
+  </build>
   <repository name="AlmaLinux_9">
     <path project="LINSTOR:OpenNebula:AlmaLinux9.8" repository="standard"/>
     <arch>x86_64</arch>

@@ -24,7 +24,9 @@ Create production initially with `production-disabled-project.xml`, then upload
 both staging builds, release the exact `frr` and `grout` binaries to production
 through the OBS `cmd=release` API. Upload `production-project.xml` only after
 the released repository has passed metadata and signature checks; that final
-metadata change enables publishing.
+metadata change enables publishing. Both production metadata files keep builds
+disabled: production is a binary-promotion repository, and all compilation and
+tests must succeed in staging before release.
 
 Installing the RPMs does not enable or start either service. NIC binding,
 service activation, FRR configuration, and OpenNebula VNM activation remain

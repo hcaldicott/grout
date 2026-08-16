@@ -122,6 +122,13 @@ autoreconf -ivf
 %install
 %make_install
 
+# FRR's public headers conditionally include the generated configuration when
+# HAVE_CONFIG_H is present.  External dataplane plugins need the same contract
+# as in-tree modules; without it, inline helpers in headers such as ipaddr.h
+# use FRR's strlcpy/strlcat implementations without visible prototypes.
+install -Dpm 644 config.h %{buildroot}%{_includedir}/frr/config.h
+sed -i '/^Cflags:/ s/$/ -DHAVE_CONFIG_H/' %{buildroot}%{_datadir}/pkgconfig/frr.pc
+
 # Remove this file, as it is uninstalled and causes errors when building on RH9
 rm -rf %{buildroot}%{_infodir}/dir
 

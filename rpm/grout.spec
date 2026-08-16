@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2024 Robin Jarry
 
-%bcond_without docs
+%bcond_with docs
 %bcond_without tests
 %bcond_without systemd
 %bcond_without frr

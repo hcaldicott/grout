@@ -1,0 +1,12 @@
+<project name="Grout:Staging:AlmaLinux9.8">
+  <title>Grout EVPN-MH staging for AlmaLinux 9.8</title>
+  <description>Unpublished validation builds of the Grout EVPN-MH dataplane and its patched FRR control plane.</description>
+  <person userid="Admin" role="maintainer"/>
+  <publish>
+    <disable/>
+  </publish>
+  <repository name="AlmaLinux_9_8">
+    <path project="LINSTOR:OpenNebula:AlmaLinux9.8" repository="standard"/>
+    <arch>x86_64</arch>
+  </repository>
+</project>

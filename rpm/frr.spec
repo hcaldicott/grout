@@ -127,7 +127,8 @@ autoreconf -ivf
 # as in-tree modules; without it, inline helpers in headers such as ipaddr.h
 # use FRR's strlcpy/strlcat implementations without visible prototypes.
 install -Dpm 644 config.h %{buildroot}%{_includedir}/frr/config.h
-sed -i '/^Cflags:/ s/$/ -DHAVE_CONFIG_H/' %{buildroot}%{_datadir}/pkgconfig/frr.pc
+sed -i '/-Wno-unused-parameter/ s/$/ -DHAVE_CONFIG_H/' \
+	%{buildroot}%{_datadir}/pkgconfig/frr.pc
 
 # Remove this file, as it is uninstalled and causes errors when building on RH9
 rm -rf %{buildroot}%{_infodir}/dir

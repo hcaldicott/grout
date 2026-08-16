@@ -19,7 +19,13 @@ The Grout source archive embeds only the checksum-verified DPDK and libecoli
 release archives required by Meson's offline wrap mode. It does not embed the
 FRR source because FRR is independently packaged and updateable.
 
-Promote the same successful source revisions to the signed `Grout` production
-project. Installing the RPMs does not enable or start either service. NIC
-binding, service activation, FRR configuration, and OpenNebula VNM activation
-remain separate, explicitly reviewed deployment steps.
+Create production initially with `production-disabled-project.xml`, then upload
+`staging-project.xml` so its manual release target is active. After validating
+both staging builds, release the exact `frr` and `grout` binaries to production
+through the OBS `cmd=release` API. Upload `production-project.xml` only after
+the released repository has passed metadata and signature checks; that final
+metadata change enables publishing.
+
+Installing the RPMs does not enable or start either service. NIC binding,
+service activation, FRR configuration, and OpenNebula VNM activation remain
+separate, explicitly reviewed deployment steps.

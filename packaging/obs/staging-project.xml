@@ -7,6 +7,7 @@
   </publish>
   <repository name="AlmaLinux_9_8">
     <path project="LINSTOR:OpenNebula:AlmaLinux9.8" repository="standard"/>
+    <releasetarget project="Grout" repository="AlmaLinux_9" trigger="manual"/>
     <arch>x86_64</arch>
   </repository>
 </project>

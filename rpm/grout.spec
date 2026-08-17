@@ -23,7 +23,6 @@
 %endif
 
 %undefine _debugsource_packages
-%global _lto_cflags %nil
 %global branch main
 %if %{with download}
 %global __meson_wrap_mode default

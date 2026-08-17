@@ -2,6 +2,7 @@
 // Copyright (c) 2024 Christophe Fontaine
 
 #include "control_input.h"
+#include "flow_hash.h"
 #include "graph.h"
 #include "iface.h"
 #include "ip4.h"
@@ -109,10 +110,9 @@ static uint16_t icmp_local_send_process(
 		icmp->icmp_seq_nb = rte_cpu_to_be_16(msg.seq_num);
 		icmp->icmp_ident = rte_cpu_to_be_16(msg.ident);
 
-		// Fake RSS to spread the traffic
-		// for ECMP routes or active/active bonds.
-		mbuf->hash.rss = msg.ident;
-		mbuf->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
+		// Seed canonical flow identity to spread locally generated traffic
+		// across ECMP routes or active/active bonds.
+		gr_mbuf_flow_hash_set(mbuf, msg.ident);
 
 		data = ip_local_mbuf_data(mbuf);
 		data->proto = IPPROTO_ICMP;

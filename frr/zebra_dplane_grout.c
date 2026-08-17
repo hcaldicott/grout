@@ -365,7 +365,7 @@ static void grout_sync_cleanup_marker(void) {
 		VRF_DEFAULT,
 #endif
 #if CURRENT_FRR_VERSION >= MAKE_FRRVERSION(10, 8, 0)
-		RT_TABLE_MAIN,
+		rt_table_main_id,
 #endif
 		ZEBRA_ROUTE_SHARP
 	);
@@ -380,7 +380,7 @@ static void grout_sync_cleanup_marker(void) {
 		NULL, // src_p
 		NULL, // nh
 		0, // nhe_id
-		RT_TABLE_MAIN,
+		rt_table_main_id,
 		0, // metric
 		DISTANCE_INFINITY,
 		false // fromkernel
@@ -394,6 +394,7 @@ static void grout_sync_cleanup_marker(void) {
 //   flags      0              keeps it out of rib_sweep_table predicate
 //   tag        unique id      distinguishes from user routes on ::/128
 //   nexthop    blackhole      inert (entry never installed)
+//   table      rt_table_main_id (Grout remaps the default table from 254 to 0)
 static void grout_sync_inject_marker(void) {
 	// Local non-const copy: rib_add_multipath takes a non-const prefix
 	// pointer and may apply_mask in-place.
@@ -416,7 +417,7 @@ static void grout_sync_inject_marker(void) {
 		0, // instance
 		0, // flags
 		0, // nhe_id
-		RT_TABLE_MAIN,
+		rt_table_main_id,
 		0, // metric
 		0, // mtu
 		DISTANCE_INFINITY,

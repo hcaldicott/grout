@@ -16,7 +16,6 @@
 #include "vlan.h"
 #include "vrf.h"
 
-#include <gr_clock.h>
 #include <gr_string.h>
 
 #include <event2/event.h>
@@ -55,15 +54,12 @@ LOG_COUNTER(set_mtu_failed);
 LOG_COUNTER(set_mac_failed);
 
 #define TUN_TAP_DEV_PATH "/dev/net/tun"
-#define CP_MBUF_EXHAUSTION_ABORT_NS (5 * GR_NS_PER_S)
 #define CP_DISCARD_LEN 2048
 
 static struct event_base *ev_base;
-static gr_clock_ns_t cp_alloc_failure_since;
 
 static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
 	char discard[CP_DISCARD_LEN];
-	gr_clock_ns_t now = gr_clock_ns();
 	ssize_t len;
 
 	// Consume one TAP frame so EV_READ does not remain asserted and spin the
@@ -79,8 +75,6 @@ static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
 			strerror(errno)
 		);
 
-	if (cp_alloc_failure_since == 0)
-		cp_alloc_failure_since = now;
 	LOG_RATELIMIT(
 		ERR,
 		rx_pool_exhausted,
@@ -88,9 +82,6 @@ static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
 		iface->name,
 		rte_mempool_avail_count(iface->pool)
 	);
-
-	if (now - cp_alloc_failure_since >= CP_MBUF_EXHAUSTION_ABORT_NS)
-		ABORT("packet pool remained exhausted for 5 seconds; restarting grout");
 }
 
 static void finalize_fd(struct event *ev, void * /*priv*/) {
@@ -185,7 +176,6 @@ static void iface_cp_poll(evutil_socket_t, short reason, void *ev_iface) {
 		iface_cp_handle_pool_exhaustion(iface);
 		return;
 	}
-	cp_alloc_failure_since = 0;
 
 	read_len = iface->mtu + RTE_ETHER_HDR_LEN + RTE_VLAN_HLEN;
 	if ((data = rte_pktmbuf_append(mbuf, read_len)) == NULL) {

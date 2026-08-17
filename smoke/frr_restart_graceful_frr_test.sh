@@ -115,7 +115,7 @@ grcli -j route show | jq -e \
 # the final sweep_count check sees 2 instead of 1.
 { tail -f -n +1 "$frr_log" || : ; } | \
 	timeout 10 grep -m 1 -E "Sweeping the RIB for stale routes" >/dev/null \
-	|| echo "warning: timeout 10s waiting for initial startup sweep to fire"
+	|| fail "timeout 10s waiting for initial startup sweep to fire"
 
 mark_events
 # Mark frr_log so the marker wait skips start_frr's earlier emission.

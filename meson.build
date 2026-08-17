@@ -98,9 +98,8 @@ dpdk_dep = dependency(
   version : '>= 25.11',
   fallback: ['dpdk-' + get_option('dpdk_version'), 'dpdk_dep'],
   default_options: [
-    # DPDK is a separately optimized dependency.  Keep project LTO focused on
-    # the shipped Grout targets instead of repeatedly carrying DPDK IR into
-    # every static whole-archive test link.
+    # Keep bundled DPDK free of distro-injected LTO. Whole-archive linkage and
+    # DPDK's generated driver sources make LTO prohibitively expensive here.
     'b_lto=false',
     'c_std=c11',
     'werror=false',
@@ -194,7 +193,6 @@ grout_exe = executable(
   include_directories: inc + api_inc,
   dependencies: [dpdk_dep, ev_core_dep, ev_extra_dep, ev_thread_dep, mnl_dep, numa_dep],
   c_args: ['-D__GROUT_MAIN__'] + grout_cflags,
-  override_options: ['b_lto=true'],
   install: true,
 )
 
@@ -203,7 +201,6 @@ grcli_exe = executable(
   include_directories: cli_inc + api_inc,
   dependencies: [ecoli_dep],
   c_args: cli_cflags + grout_cflags,
-  override_options: ['b_lto=true'],
   install: true,
 )
 
@@ -235,10 +232,9 @@ if cmocka_dep.found()
       'c_args': ['-D__GROUT_MAIN__', '-D__GROUT_UNIT_TEST__'],
       'link_args': t['link_args'],
       'dependencies': [dpdk_dep, ev_core_dep, ev_thread_dep, numa_dep, ecoli_dep, cmocka_dep],
-      # Unit tests use GNU ld --wrap mocks.  With LTO enabled, the compiler can
+      # Unit tests use GNU ld --wrap mocks. With LTO enabled, the compiler can
       # resolve and inline calls before the linker applies those wrappers,
-      # causing tests to call real DPDK functions.  Keep production targets on
-      # the project LTO policy while preserving the test interception contract.
+      # causing tests to call real DPDK functions.
       'override_options': ['b_lto=false'],
     }
     test(name, executable(name, kwargs: t), suite: 'unit')

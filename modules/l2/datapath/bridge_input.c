@@ -45,14 +45,12 @@ static bool bridge_nhg_select_vtep(struct rte_mbuf *m, uint32_t nhg_id, struct l
 	if (nh == NULL || nh->type != GR_NH_T_GROUP)
 		return false;
 
+	// Bridged frames from a port without RSS or from the control plane have
+	// no hash yet. Publish the software hash so that vxlan and bond output
+	// keep this flow on the same path.
 	flow_hash = gr_mbuf_flow_hash(m, GR_MBUF_FLOW_HASH_RSS);
-	if (!(m->ol_flags & RTE_MBUF_F_RX_RSS_HASH)) {
-		// Contract: once bridge ECMP computes a software flow hash, publish it as
-		// the packet's canonical RSS hash. Bond TX and VXLAN encapsulation must
-		// consume this same value to preserve per-flow path affinity.
-		m->hash.rss = flow_hash;
-		m->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
-	}
+	if (!(m->ol_flags & RTE_MBUF_F_RX_RSS_HASH))
+		gr_mbuf_flow_hash_set(m, flow_hash);
 	nh = nexthop_group_get_nh(nexthop_info_group(nh), flow_hash);
 	if (nh == NULL || nh->type != GR_NH_T_L2)
 		return false;

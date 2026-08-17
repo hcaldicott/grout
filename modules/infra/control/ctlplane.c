@@ -36,12 +36,10 @@
 LOG_TYPE("ctlplane");
 
 #define TUN_TAP_DEV_PATH "/dev/net/tun"
-#define CP_MBUF_EXHAUSTION_ABORT_NS (5 * GR_NS_PER_S)
 #define CP_MBUF_EXHAUSTION_LOG_NS GR_NS_PER_S
 #define CP_DISCARD_LEN 2048
 
 static struct event_base *ev_base;
-static gr_clock_ns_t cp_alloc_failure_since;
 static gr_clock_ns_t cp_alloc_last_log;
 
 static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
@@ -56,8 +54,6 @@ static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
 	if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
 		LOG(ERR, "discard from tap device %s failed: %s", iface->name, strerror(errno));
 
-	if (cp_alloc_failure_since == 0)
-		cp_alloc_failure_since = now;
 	if (cp_alloc_last_log == 0 || now - cp_alloc_last_log >= CP_MBUF_EXHAUSTION_LOG_NS) {
 		cp_alloc_last_log = now;
 		LOG(ERR,
@@ -65,9 +61,6 @@ static void iface_cp_handle_pool_exhaustion(struct iface *iface) {
 		    iface->name,
 		    rte_mempool_avail_count(iface->pool));
 	}
-
-	if (now - cp_alloc_failure_since >= CP_MBUF_EXHAUSTION_ABORT_NS)
-		ABORT("packet pool remained exhausted for 5 seconds; restarting grout");
 }
 
 static void finalize_fd(struct event *ev, void * /*priv*/) {
@@ -153,7 +146,6 @@ static void iface_cp_poll(evutil_socket_t, short reason, void *ev_iface) {
 		iface_cp_handle_pool_exhaustion(iface);
 		return;
 	}
-	cp_alloc_failure_since = 0;
 
 	read_len = iface->mtu + RTE_ETHER_HDR_LEN + RTE_VLAN_HLEN;
 	if ((data = rte_pktmbuf_append(mbuf, read_len)) == NULL) {

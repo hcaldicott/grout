@@ -46,7 +46,7 @@ frr_plugin = shared_module(
   include_directories: api_inc + include_directories('.'),
   install: not install_build_flag,
   install_dir: frr_moduledir,
-  override_options: ['b_lto=true', 'b_sanitize=none'],
+  override_options: ['b_sanitize=none'],
 )
 
 if install_build_flag

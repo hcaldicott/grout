@@ -11,6 +11,7 @@
 #include "module.h"
 #include "netlink.h"
 
+#include <gr_clock.h>
 #include <gr_infra.h>
 #include <gr_string.h>
 
@@ -33,8 +34,38 @@ LOG_TYPE("loopback");
 #define GR_LOOPBACK_TUN_NAME_PREFIX "gr-loop"
 // TUN device naming pattern: gr-loop{iface_id}
 #define GR_LOOPBACK_TUN_NAME_PATTERN GR_LOOPBACK_TUN_NAME_PREFIX "%d"
+#define LOOP_MBUF_EXHAUSTION_ABORT_NS (5 * GR_NS_PER_S)
+#define LOOP_MBUF_EXHAUSTION_LOG_NS GR_NS_PER_S
+#define LOOP_DISCARD_LEN 2048
 
 static struct event_base *ev_base;
+static gr_clock_ns_t loop_alloc_failure_since;
+static gr_clock_ns_t loop_alloc_last_log;
+
+static void iface_loopback_handle_pool_exhaustion(struct iface *iface) {
+	char discard[LOOP_DISCARD_LEN];
+	gr_clock_ns_t now = gr_clock_ns();
+	ssize_t len;
+
+	// Consume one TUN packet to clear readiness and keep the main event loop
+	// responsive. The packet cannot be forwarded without an mbuf.
+	len = read(iface->cp_fd, discard, sizeof(discard));
+	if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+		LOG(ERR, "discard from tun device %s failed: %s", iface->name, strerror(errno));
+
+	if (loop_alloc_failure_since == 0)
+		loop_alloc_failure_since = now;
+	if (loop_alloc_last_log == 0 || now - loop_alloc_last_log >= LOOP_MBUF_EXHAUSTION_LOG_NS) {
+		loop_alloc_last_log = now;
+		LOG(ERR,
+		    "packet pool exhausted on tun %s (available=%u); control-plane packet dropped",
+		    iface->name,
+		    rte_mempool_avail_count(iface->pool));
+	}
+
+	if (now - loop_alloc_failure_since >= LOOP_MBUF_EXHAUSTION_ABORT_NS)
+		ABORT("packet pool remained exhausted for 5 seconds; restarting grout");
+}
 
 static void finalize_fd(struct event *ev, void * /*priv*/) {
 	int fd = event_get_fd(ev);
@@ -121,9 +152,10 @@ static void iface_loopback_poll(evutil_socket_t, short reason, void *ev_iface) {
 
 	mbuf = rte_pktmbuf_alloc(iface->pool);
 	if (!mbuf) {
-		LOG(ERR, "rte_pktmbuf_alloc %s", rte_strerror(rte_errno));
-		goto err;
+		iface_loopback_handle_pool_exhaustion(iface);
+		return;
 	}
+	loop_alloc_failure_since = 0;
 
 	if ((data = rte_pktmbuf_append(mbuf, iface->mtu)) == NULL) {
 		LOG(ERR, "rte_pktmbuf_append %s", rte_strerror(rte_errno));

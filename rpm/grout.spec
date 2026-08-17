@@ -23,6 +23,10 @@
 %endif
 
 %undefine _debugsource_packages
+# The distro RPM flags apply LTO indiscriminately to subprojects and unit-test
+# binaries. Meson owns LTO scope so shipped Grout targets remain optimized
+# while linker-wrapped tests and bundled DPDK can opt out.
+%global _lto_cflags %nil
 %global branch main
 %if %{with download}
 %global __meson_wrap_mode default

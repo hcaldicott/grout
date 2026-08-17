@@ -4,11 +4,15 @@
 
 [Unit]
 Description=Graph router daemon
-After=network.target basic.target
+After=basic.target
+Before=frr.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
 
 [Service]
 Type=notify
 Restart=on-failure
+RestartSec=2s
 EnvironmentFile=-/etc/default/grout
 ExecStartPre=/usr/bin/udevadm settle
 ExecStart=/usr/bin/grout $GROUT_OPTS

@@ -43,12 +43,14 @@ assert_not_in_other_section() {
 	fi
 }
 
-assert_directive Unit Requires grout.service
+assert_directive Unit BindsTo grout.service
 assert_directive Unit After grout.service
+assert_directive Unit PartOf grout.service
 assert_directive Unit JoinsNamespaceOf grout.service
 assert_directive Service PrivateNetwork true
 
-assert_not_in_other_section Unit Requires
+assert_not_in_other_section Unit BindsTo
 assert_not_in_other_section Unit After
+assert_not_in_other_section Unit PartOf
 assert_not_in_other_section Unit JoinsNamespaceOf
 assert_not_in_other_section Service PrivateNetwork

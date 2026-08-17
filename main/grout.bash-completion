@@ -10,6 +10,7 @@ _grout() {
 
 	all=(
 "-h --help"
+"--mempool-cache-size"
 "-p --poll-mode"
 "-t --test-mode"
 "-v --verbose"
@@ -19,6 +20,10 @@ _grout() {
 	case "$prev" in
 	-s|--socket)
 		_filedir
+		return
+		;;
+	--mempool-cache-size)
+		COMPREPLY=($(compgen -W "0 64 128 256 512" -- "$cur"))
 		return
 		;;
 	esac

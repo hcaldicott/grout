@@ -17,6 +17,7 @@
 
 #include <event2/event.h>
 #include <event2/thread.h>
+#include <rte_mempool.h>
 #include <rte_version.h>
 
 #include <getopt.h>
@@ -41,6 +42,7 @@ static void usage(void) {
 	printf(" [-V]");
 	printf(" [-h]");
 	printf(" [-m PERMISSIONS]");
+	printf(" [--mempool-cache-size COUNT]");
 	printf(" [-o USER:GROUP]");
 	printf("\n            ");
 	printf(" [-p]");
@@ -64,6 +66,8 @@ static void usage(void) {
 	puts("  -a, --adaptive-irq             Idle workers block on rxq interrupts.");
 	puts("  -h, --help                     Display this help message and exit.");
 	puts("  -m, --socket-mode PERMISSIONS  API socket file permissions (Default: 0660).");
+	puts("      --mempool-cache-size COUNT Per-lcore packet-pool cache (default 512).");
+	puts("                                 Use 0 to disable; maximum 512.");
 	puts("  -o, --socket-owner USER:GROUP  API socket file ownership");
 	puts("  -p, --poll-mode                Disable automatic micro-sleep.");
 	puts("  -s, --socket PATH              Path the control plane API socket.");
@@ -183,6 +187,16 @@ static bool parse_bool_env(const char *name) {
 		|| strcasecmp(val, "on") == 0 || strcasecmp(val, "yes") == 0;
 }
 
+enum {
+	OPT_MEMPOOL_CACHE_SIZE = 0x100,
+};
+
+static int parse_mempool_cache_size(const char *arg) {
+	const unsigned max = RTE_MEMPOOL_CACHE_MAX_SIZE;
+
+	return parse_uint(&gr_config.mempool_cache_size, arg, 10, 0, max);
+}
+
 static int parse_args(int argc, char **argv) {
 	int c;
 
@@ -191,6 +205,7 @@ static int parse_args(int argc, char **argv) {
 		{"adaptive-irq", no_argument, NULL, 'a'},
 		{"help", no_argument, NULL, 'h'},
 		{"max-mtu", required_argument, NULL, 'u'},
+		{"mempool-cache-size", required_argument, NULL, OPT_MEMPOOL_CACHE_SIZE},
 		{"metrics", required_argument, NULL, 'M'},
 		{"poll-mode", no_argument, NULL, 'p'},
 		{"socket", required_argument, NULL, 's'},
@@ -213,6 +228,7 @@ static int parse_args(int argc, char **argv) {
 	gr_config.api_sock_gid = getgid();
 	gr_config.api_sock_mode = 0660;
 	gr_config.max_mtu = 1800;
+	gr_config.mempool_cache_size = RTE_MEMPOOL_CACHE_MAX_SIZE;
 	gr_config.log_level = RTE_LOG_NOTICE;
 	gr_config.eal_extra_args = NULL;
 	gr_config.metrics_addr = "::";
@@ -230,6 +246,10 @@ static int parse_args(int argc, char **argv) {
 		case 'm':
 			if (parse_uint(&gr_config.api_sock_mode, optarg, 8, 0, 07777) < 0)
 				return perr("--socket-mode: %s", strerror(errno));
+			break;
+		case OPT_MEMPOOL_CACHE_SIZE:
+			if (parse_mempool_cache_size(optarg) < 0)
+				return perr("--mempool-cache-size: %s", strerror(errno));
 			break;
 		case 'o':
 			if (parse_sock_owner(optarg) < 0)

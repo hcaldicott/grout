@@ -16,6 +16,7 @@ Grout is a software router based on DPDK _rte_graph_.
 \[*-V*]
 \[*-h*]
 \[*-m* _PERMISSIONS_]
+\[*--mempool-cache-size* _COUNT_]
 \[*-o* _USER_:_GROUP_]
 \[*-p*]
 \[*-s* _PATH_]
@@ -41,6 +42,15 @@ Grout is a software router based on DPDK _rte_graph_.
 	values are supported.
 
 	Default: _0660_.
+
+*--mempool-cache-size* _COUNT_
+	Set the per-lcore packet mempool cache size. Smaller caches reduce the
+	number of free mbufs that can be held in a different lcore's cache when
+	packets are allocated and freed on different lcores. Larger caches reduce
+	shared mempool ring access under high packet rates. Valid values are _0_
+	through _512_; _0_ disables the per-lcore cache.
+
+	Default: _512_.
 
 *-o*, *--socket-owner* _USER_:_GROUP_
 	Change the owner of the API socket file after creating it. Symbolic

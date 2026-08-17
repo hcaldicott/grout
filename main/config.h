@@ -17,6 +17,7 @@ struct gr_config {
 	mode_t api_sock_mode;
 	unsigned log_level;
 	unsigned max_mtu;
+	unsigned mempool_cache_size;
 	bool test_mode;
 	bool poll_mode;
 	bool adaptive_irq; // --adaptive-irq: adaptive interrupt rx

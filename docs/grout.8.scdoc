@@ -164,6 +164,15 @@ be adjusted at runtime via the API (e.g. *grcli route config set*,
 
 	Default: _65535_.
 
+*GROUT_MEMPOOL_CACHE_SIZE* [startup only]
+	Per-lcore packet mempool cache size. Smaller caches reduce the
+	number of free mbufs that can be held in a different lcore's cache when
+	packets are allocated and freed on different lcores. Larger caches reduce
+	shared mempool ring access under high packet rates. Valid values are _0_
+	through _512_; _0_ disables the per-lcore cache.
+
+	Default: _512_.
+
 *GROUT_MAX_NEXTHOPS*
 	Maximum number of nexthops for all address families.
 

@@ -151,10 +151,15 @@ export GROUT_VERSION="%{version}-%{release}"
 # optimizations fail the package build before reaching a host.
 grout_bin=$(find . -maxdepth 2 -type f -name grout -perm -111 -print -quit)
 test -n "$grout_bin"
+GROUT_MEMPOOL_CACHE_SIZE=64 "$grout_bin" --version
+if GROUT_MEMPOOL_CACHE_SIZE=513 "$grout_bin" --version; then
+	echo "out-of-range mempool cache size was accepted" >&2
+	exit 1
+fi
 smoke_socket="$PWD/grout-smoke.sock"
 smoke_log="$PWD/grout-smoke.log"
 set +e
-timeout --signal=TERM 3s "$grout_bin" -t -s "$smoke_socket" \
+timeout --signal=TERM 3s env GROUT_MEMPOOL_CACHE_SIZE=64 "$grout_bin" -t -s "$smoke_socket" \
 	-M tcp:127.0.0.1:0 -- -m 128 >"$smoke_log" 2>&1
 smoke_rc=$?
 set -e

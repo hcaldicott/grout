@@ -31,7 +31,6 @@ struct mempool_tracker {
 };
 
 #define MAX_MEMPOOL_PER_NUMA 32
-#define MEMPOOL_CACHE_SIZE 64
 #define ETHER_HDR_SIZE 14
 #define VLAN_HDR_SIZE 4
 
@@ -82,20 +81,22 @@ struct rte_mempool *gr_pktmbuf_pool_get(int8_t socket_id, uint32_t count) {
 				mempool_default_size = alloc_size;
 			}
 			LOG(DEBUG,
-			    "allocate mempool %s reserved %u (size %u, mbuf_size %u)",
+			    "allocate mempool %s reserved %u (size %u, mbuf_size %u, "
+			    "cache_size %u)",
 			    mp_name,
 			    count,
 			    alloc_size,
-			    mbuf_size);
-			// Mbufs allocated by the control thread are commonly freed by a
-			// worker. A 512-object per-lcore cache can therefore strand
-			// thousands of otherwise available mbufs away from the control
-			// thread and cause false pool exhaustion under sustained traffic.
-			uint32_t cache_size = RTE_MIN((uint32_t)MEMPOOL_CACHE_SIZE, alloc_size / 2);
+			    mbuf_size,
+			    gr_config.mempool_cache_size);
 			mt->mp = rte_pktmbuf_pool_create(
 				mp_name,
 				alloc_size,
-				cache_size,
+				// Mbufs allocated by the control thread are commonly freed by a
+				// worker. Large per-lcore caches can therefore strand thousands
+				// of otherwise available mbufs away from the allocating thread.
+				// Keep this tunable so operators can balance cross-core
+				// availability against shared-ring contention for their workload.
+				RTE_MIN((uint32_t)gr_config.mempool_cache_size, alloc_size / 2),
 				GR_MBUF_PRIV_MAX_SIZE,
 				mbuf_size,
 				socket_id

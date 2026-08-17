@@ -389,6 +389,59 @@ capture_carrier_bum() {
 		fail "PE2 received $count2 BUM copies, expected $expected_pe2"
 }
 
+capture_flood_hash_affinity() {
+	local ether_type=0x88bb
+	local pcap="$tmp/flood-hash-affinity.pcap"
+	local capture_pid decoded count unique_ports
+
+	ip netns exec "$fabric" timeout 2 tcpdump -Q in -U -qn -i x-u3 -w "$pcap" \
+		"src host ${vteps[2]} and udp dst port 4789" 2>/dev/null &
+	capture_pid=$!
+	sleep 0.2
+	ip netns exec "${hosts[2]}" python3 - x-a3 "$ether_type" <<-'PY'
+	import socket
+	import struct
+	import sys
+
+	iface, ether_type = sys.argv[1:]
+	frame = (
+	    b"\xff" * 6
+	    + bytes.fromhex("02000000bb03")
+	    + struct.pack("!H", int(ether_type, 0))
+	    + b"evpn-mh-flow-hash-copy"
+	)
+	frame += b"\x00" * (60 - len(frame))
+	sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+	sock.bind((iface, 0))
+	sock.send(frame)
+	sock.close()
+	PY
+	wait "$capture_pid" || true
+
+	# Ethernet(14) + IPv4(20) + UDP(8) + VXLAN(8) + inner MACs(12).
+	decoded=$(tcpdump -nn -r "$pcap" "ether[62:2] = $ether_type" 2>/dev/null) ||
+		fail "could not inspect flood hash-affinity capture"
+	count=$(printf '%s\n' "$decoded" | sed -n '/ IP /p' | wc -l)
+	[ "$count" -eq 2 ] ||
+		fail "software-ingress BUM produced $count VXLAN copies, expected 2"
+	printf '%s\n' "$decoded" | grep -Fq "> ${vteps[0]}.4789" ||
+		fail "software-ingress BUM did not reach ${vteps[0]}"
+	printf '%s\n' "$decoded" | grep -Fq "> ${vteps[1]}.4789" ||
+		fail "software-ingress BUM did not reach ${vteps[1]}"
+	unique_ports=$(printf '%s\n' "$decoded" | awk '
+		/ IP / {
+			for (i = 1; i <= NF; i++) {
+				if ($i == "IP") {
+					src = $(i + 1)
+					sub(/^.*\./, "", src)
+					print src
+				}
+			}
+		}' | sort -u | wc -l)
+	[ "$unique_ports" -eq 1 ] ||
+		fail "BUM flood copies did not retain one canonical VXLAN source port"
+}
+
 capture_injected_vxlan_bum() {
 	local source_vtep="$1"
 	local ether_type="$2"
@@ -715,6 +768,8 @@ configure_mh_carrier() {
 		return
 	fi
 
+	capture_flood_hash_affinity
+	echo "PASS: software-ingress BUM copies retain canonical flow-hash affinity"
 	capture_carrier_bum 0x88b5 1 0
 	vtysh -N "${nodes[1]}" <<-EOF
 	configure terminal

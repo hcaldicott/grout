@@ -19,6 +19,13 @@
 prefix=10.99.99.0/24
 nh_ip=172.16.0.2
 
+# The Grout provider remaps Zebra's default table from Linux table 254 to 0.
+# Prove the startup barrier is inserted and polled in that effective table
+# before relying on the same barrier for reconnect recovery.
+{ tail -f -n +1 "$frr_log" || : ; } | \
+	timeout 10 grep -m 1 -E "sync marker observed" >/dev/null \
+	|| fail "timeout 10s waiting for the initial FRR sync marker"
+
 create_interface p0
 set_ip_address p0 172.16.0.1/24
 

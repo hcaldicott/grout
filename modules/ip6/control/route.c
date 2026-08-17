@@ -375,12 +375,21 @@ int rib6_delete(
 
 static struct api_out route6_add(const void *request, struct api_ctx *) {
 	const struct gr_ip6_route_add_req *req = request;
+	struct nexthop *existing;
 	bool created = false;
 	struct nexthop *nh;
 	int ret;
 
 	if (req->origin == GR_NH_ORIGIN_INTERNAL)
 		return api_out(EINVAL, 0, NULL);
+
+	// Keep address-owned connected routes authoritative during routing daemon
+	// replay. See the IPv4 handler for the ordering race this prevents.
+	existing = rib6_lookup_exact(
+		req->vrf_id, GR_IFACE_ID_UNDEF, &req->dest.ip, req->dest.prefixlen
+	);
+	if (existing != NULL && existing->origin == GR_NH_ORIGIN_INTERNAL)
+		return api_out(0, 0, NULL);
 
 	if (req->nh_id != GR_NH_ID_UNSET) {
 		nh = nexthop_lookup_id(req->nh_id);
@@ -439,7 +448,11 @@ static struct api_out route6_del(const void *request, struct api_ctx *) {
 	struct nexthop *nh = NULL;
 	int ret;
 
-	nh = rib6_lookup(req->vrf_id, GR_IFACE_ID_UNDEF, &req->dest.ip);
+	nh = rib6_lookup_exact(req->vrf_id, GR_IFACE_ID_UNDEF, &req->dest.ip, req->dest.prefixlen);
+	if (nh != NULL && nh->origin == GR_NH_ORIGIN_INTERNAL)
+		return api_out(0, 0, NULL);
+	if (nh == NULL)
+		nh = rib6_lookup(req->vrf_id, GR_IFACE_ID_UNDEF, &req->dest.ip);
 	ret = rib6_delete(
 		req->vrf_id,
 		GR_IFACE_ID_UNDEF,

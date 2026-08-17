@@ -343,12 +343,22 @@ int rib4_delete(uint16_t vrf_id, ip4_addr_t ip, uint8_t prefixlen, gr_nh_type_t 
 
 static struct api_out route4_add(const void *request, struct api_ctx *) {
 	const struct gr_ip4_route_add_req *req = request;
+	struct nexthop *existing;
 	bool created = false;
 	struct nexthop *nh;
 	int ret;
 
 	if (req->origin == GR_NH_ORIGIN_INTERNAL)
 		return api_out(EINVAL, 0, NULL);
+
+	// Address-owned connected routes are authoritative. During control-plane
+	// replay, a routing protocol can transiently offer the same prefix before
+	// Zebra has reconciled the interface address. Do not replace the connected
+	// route: the later protocol withdrawal would otherwise remove the only
+	// route while leaving the address configured.
+	existing = rib4_lookup_exact(req->vrf_id, req->dest.ip, req->dest.prefixlen);
+	if (existing != NULL && existing->origin == GR_NH_ORIGIN_INTERNAL)
+		return api_out(0, 0, NULL);
 
 	if (req->nh_id != GR_NH_ID_UNSET) {
 		nh = nexthop_lookup_id(req->nh_id);
@@ -398,7 +408,11 @@ static struct api_out route4_del(const void *request, struct api_ctx *) {
 	struct nexthop *nh = NULL;
 	int ret;
 
-	nh = rib4_lookup(req->vrf_id, req->dest.ip);
+	nh = rib4_lookup_exact(req->vrf_id, req->dest.ip, req->dest.prefixlen);
+	if (nh != NULL && nh->origin == GR_NH_ORIGIN_INTERNAL)
+		return api_out(0, 0, NULL);
+	if (nh == NULL)
+		nh = rib4_lookup(req->vrf_id, req->dest.ip);
 	ret = rib4_delete(
 		req->vrf_id, req->dest.ip, req->dest.prefixlen, nh ? nh->type : GR_NH_T_L3
 	);

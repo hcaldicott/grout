@@ -4,28 +4,34 @@
 #include "flow_hash.h"
 #include "mbuf.h"
 
+#ifndef __GROUT_UNIT_TEST__
+#include "log.h"
+#include "module.h"
+#endif
+
 #include <rte_ether.h>
 #include <rte_ip4.h>
 #include <rte_ip6.h>
+#include <rte_mbuf_dyn.h>
 #include <rte_tcp.h>
 #include <rte_thash.h>
 #include <rte_udp.h>
 
-uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mode) {
-	static const uint8_t rss_key[] = {
-		0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2, 0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3,
-		0x8f, 0xb0, 0xd0, 0xca, 0x2b, 0xcb, 0xae, 0x7b, 0x30, 0xb4, 0x77, 0xcb, 0x2d, 0xa3,
-		0x80, 0x30, 0xf2, 0x0c, 0x6a, 0x42, 0xb7, 0x3b, 0xbe, 0xac, 0x01, 0xfa,
-	};
+int gr_mbuf_flow_hash_offset = -1;
+uint64_t gr_mbuf_flow_hash_flag;
+
+static const uint8_t rss_key[] = {
+	0x6d, 0x5a, 0x56, 0xda, 0x25, 0x5b, 0x0e, 0xc2, 0x41, 0x67, 0x25, 0x3d, 0x43, 0xa3,
+	0x8f, 0xb0, 0xd0, 0xca, 0x2b, 0xcb, 0xae, 0x7b, 0x30, 0xb4, 0x77, 0xcb, 0x2d, 0xa3,
+	0x80, 0x30, 0xf2, 0x0c, 0x6a, 0x42, 0xb7, 0x3b, 0xbe, 0xac, 0x01, 0xfa,
+};
+
+static uint32_t flow_hash_l3(const struct rte_mbuf *m, uint32_t l3_offset, rte_be16_t eth_type) {
 	union {
 		uint32_t u32;
-		struct {
-			struct rte_ether_addr mac;
-			rte_be16_t vlan_id;
-		} l2;
 		struct rte_ipv4_tuple v4;
 		struct rte_ipv6_tuple v6;
-	} tuple;
+	} tuple = {};
 	union {
 		const struct rte_ipv4_hdr *ip4;
 		const struct rte_ipv6_hdr *ip6;
@@ -34,31 +40,7 @@ uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mo
 		const struct rte_udp_hdr *udp;
 		const struct rte_tcp_hdr *tcp;
 	} l4;
-	const struct rte_ether_hdr *eth;
-	const struct rte_vlan_hdr *vlan;
-	uint32_t l3_offset, len;
-	rte_be16_t eth_type;
-
-	if (mode == GR_MBUF_FLOW_HASH_RSS && (m->ol_flags & RTE_MBUF_F_RX_RSS_HASH))
-		return m->hash.rss;
-
-	eth = rte_pktmbuf_mtod(m, const struct rte_ether_hdr *);
-	tuple.l2.mac = eth->dst_addr;
-	if (eth->ether_type == RTE_BE16(RTE_ETHER_TYPE_VLAN)) {
-		vlan = (const struct rte_vlan_hdr *)(eth + 1);
-		tuple.l2.vlan_id = vlan->vlan_tci;
-		eth_type = vlan->eth_proto;
-		l3_offset = sizeof(*eth) + sizeof(*vlan);
-	} else {
-		tuple.l2.vlan_id = 0;
-		eth_type = eth->ether_type;
-		l3_offset = sizeof(*eth);
-	}
-
-	if (mode == GR_MBUF_FLOW_HASH_L2) {
-		len = sizeof(tuple.l2);
-		goto hash;
-	}
+	uint32_t len;
 
 	switch (eth_type) {
 	case RTE_BE16(RTE_ETHER_TYPE_IPV4):
@@ -130,10 +112,108 @@ uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mo
 		len = sizeof(tuple.v6);
 		break;
 	default:
-		len = sizeof(tuple.l2);
-		break;
+		return 0;
 	}
 
-hash:
 	return rte_softrss_be(&tuple.u32, len / sizeof(uint32_t), rss_key);
 }
+
+uint32_t gr_mbuf_flow_hash(const struct rte_mbuf *m, gr_mbuf_flow_hash_mode_t mode) {
+	union {
+		uint32_t u32;
+		struct {
+			struct rte_ether_addr mac;
+			rte_be16_t vlan_id;
+		} l2;
+	} tuple;
+	const struct rte_ether_hdr *eth;
+	const struct rte_vlan_hdr *vlan;
+	uint32_t l3_offset;
+	rte_be16_t eth_type;
+
+	if (mode == GR_MBUF_FLOW_HASH_RSS && (m->ol_flags & RTE_MBUF_F_RX_RSS_HASH))
+		return m->hash.rss;
+
+	eth = rte_pktmbuf_mtod(m, const struct rte_ether_hdr *);
+	tuple.l2.mac = eth->dst_addr;
+	if (eth->ether_type == RTE_BE16(RTE_ETHER_TYPE_VLAN)) {
+		vlan = (const struct rte_vlan_hdr *)(eth + 1);
+		tuple.l2.vlan_id = vlan->vlan_tci;
+		eth_type = vlan->eth_proto;
+		l3_offset = sizeof(*eth) + sizeof(*vlan);
+	} else {
+		tuple.l2.vlan_id = 0;
+		eth_type = eth->ether_type;
+		l3_offset = sizeof(*eth);
+	}
+
+	if (mode == GR_MBUF_FLOW_HASH_L2
+	    || (eth_type != RTE_BE16(RTE_ETHER_TYPE_IPV4)
+		&& eth_type != RTE_BE16(RTE_ETHER_TYPE_IPV6)))
+		return rte_softrss_be(&tuple.u32, sizeof(tuple.l2) / sizeof(uint32_t), rss_key);
+
+	return flow_hash_l3(m, l3_offset, eth_type);
+}
+
+uint32_t gr_mbuf_flow_hash_get(struct rte_mbuf *m) {
+	uint32_t hash;
+
+	if (gr_mbuf_flow_hash_is_valid(m))
+		return *RTE_MBUF_DYNFIELD(m, gr_mbuf_flow_hash_offset, const uint32_t *);
+
+	if (m->ol_flags & RTE_MBUF_F_RX_RSS_HASH)
+		hash = m->hash.rss;
+	else
+		hash = gr_mbuf_flow_hash(m, GR_MBUF_FLOW_HASH_L3_L4);
+
+	gr_mbuf_flow_hash_set(m, hash);
+	return hash;
+}
+
+uint32_t gr_mbuf_flow_hash_get_l3(struct rte_mbuf *m, rte_be16_t eth_type) {
+	uint32_t hash;
+
+	if (gr_mbuf_flow_hash_is_valid(m))
+		return *RTE_MBUF_DYNFIELD(m, gr_mbuf_flow_hash_offset, const uint32_t *);
+
+	if (m->ol_flags & RTE_MBUF_F_RX_RSS_HASH)
+		hash = m->hash.rss;
+	else
+		hash = flow_hash_l3(m, 0, eth_type);
+
+	gr_mbuf_flow_hash_set(m, hash);
+	return hash;
+}
+
+#ifndef __GROUT_UNIT_TEST__
+static void flow_hash_init(struct event_base *) {
+	const struct rte_mbuf_dynfield field = {
+		.name = "grout_flow_hash",
+		.size = sizeof(uint32_t),
+		.align = alignof(uint32_t),
+	};
+	const struct rte_mbuf_dynflag flag = {
+		.name = "grout_flow_hash_valid",
+	};
+	int bit;
+
+	gr_mbuf_flow_hash_offset = rte_mbuf_dynfield_register(&field);
+	if (gr_mbuf_flow_hash_offset < 0)
+		ABORT("rte_mbuf_dynfield_register(grout_flow_hash): %s", rte_strerror(rte_errno));
+
+	bit = rte_mbuf_dynflag_register(&flag);
+	if (bit < 0)
+		ABORT("rte_mbuf_dynflag_register(grout_flow_hash_valid): %s",
+		      rte_strerror(rte_errno));
+	gr_mbuf_flow_hash_flag = RTE_BIT64(bit);
+}
+
+static struct module module = {
+	.name = "flow_hash",
+	.init = flow_hash_init,
+};
+
+RTE_INIT(flow_hash_constructor) {
+	module_register(&module);
+}
+#endif

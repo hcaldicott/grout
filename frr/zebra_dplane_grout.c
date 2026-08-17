@@ -19,16 +19,15 @@
 #include <lib/frr_pthread.h>
 #include <lib/libfrr.h>
 #include <lib/version.h>
+#include <limits.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <zebra/interface.h>
 #include <zebra/rib.h>
 #include <zebra/zebra_dplane.h>
 #include <zebra/zebra_router.h>
 #include <zebra/zebra_vrf.h>
 #include <zebra_dplane_grout.h>
-
-#include <limits.h>
-#include <stdio.h>
-#include <unistd.h>
 
 #define TOSTRING(x) #x
 
@@ -43,9 +42,12 @@ static struct prefix grout_sync_marker_prefix = {
 	.prefixlen = 128,
 };
 #define GROUT_SYNC_MARKER_POLL_MS 50
-// One warning every ~5s while polling. No timeout: dispatch only on
-// actual observation, mirroring kernel-side "Finished Initial Startup".
+// One warning every ~5s while polling. A marker that is still absent after
+// 30 seconds indicates a broken replay barrier, not a merely slow metaQ.
+// Exit Zebra so watchfrr retries from a clean process instead of leaving the
+// routing stack permanently half-started.
 #define GROUT_SYNC_MARKER_WARN_EVERY 100
+#define GROUT_SYNC_MARKER_MAX_POLLS 600
 
 // Pre-arm delay for zrouter.t_rib_sweep. Only purpose: keep *t_ptr
 // non-NULL so zebra_main_router_started's event_add_timer takes the
@@ -101,14 +103,21 @@ static void grout_main_router_started(void);
 static void grout_sync_cleanup_marker(void);
 static void grout_sync_inject_marker(void);
 
+// The default VRF's route table is authoritative. rt_table_main_id is changed
+// to zero by grout_ns_reset(), but an already-created zebra_vrf may still
+// carry its previous table ID while startup/reconnect events are being
+// drained. Using the live VRF table ID keeps marker injection, lookup and
+// cleanup in the same table across that transition.
+static uint32_t grout_sync_marker_table_id(void) {
+	struct zebra_vrf *zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
+
+	return zvrf ? zvrf->table_id : rt_table_main_id;
+}
+
 // One-shot integration-test fault hook. It is inert unless an administrator
 // supplies GROUT_DPLANE_FAULT_FILE. The file contains:
 //   GR_API_MESSAGE_NAME object-id-or-zero errno delay-ms
-static bool grout_fault_inject(
-	uint32_t req_type,
-	size_t tx_len,
-	const void *tx_data
-) {
+static bool grout_fault_inject(uint32_t req_type, size_t tx_len, const void *tx_data) {
 	const char *path = getenv("GROUT_DPLANE_FAULT_FILE");
 	char claim[PATH_MAX], message[64];
 	uint32_t object_id = 0, expected_id;
@@ -138,11 +147,11 @@ static bool grout_fault_inject(
 	if (req_type == GR_NH_ADD && tx_len >= sizeof(struct gr_nh_add_req))
 		object_id = ((const struct gr_nh_add_req *)tx_data)->nh.nh_id;
 	else if (req_type == GR_NH_DEL && tx_len >= sizeof(struct gr_nh_del_req))
-		object_id = ((const struct gr_nh_del_req *)tx_data)->nh_id;
+		object_id = ((const struct gr_nh_del_req *)tx_data)->nh.nh_id;
 
 	if (strcmp(message, gr_api_message_name(req_type)) != 0
-	    || (expected_id != 0 && expected_id != object_id) || error <= 0
-	    || delay_ms < 0 || delay_ms > 5000) {
+	    || (expected_id != 0 && expected_id != object_id) || error <= 0 || delay_ms < 0
+	    || delay_ms > 5000) {
 		rename(claim, path);
 		return false;
 	}
@@ -151,12 +160,7 @@ static bool grout_fault_inject(
 	if (delay_ms != 0)
 		usleep((useconds_t)delay_ms * 1000);
 	errno = error;
-	gr_log_err(
-		"fault injection: %s object %u: %s",
-		message,
-		object_id,
-		strerror(errno)
-	);
+	gr_log_err("fault injection: %s object %u: %s", message, object_id, strerror(errno));
 	return true;
 }
 
@@ -264,8 +268,12 @@ static void grout_sync_fdb(struct event *) {
 		}
 	}
 
-	// No VRFs to sync. Signal zebra we are ready.
-	grout_main_router_started();
+	// An empty Grout instance still needs the same FIFO barrier. Startup may
+	// otherwise arm Zebra's RIB sweep before earlier global replay work has
+	// drained, and the restart contract becomes dependent on whether at least
+	// one VRF happened to exist.
+	grout_ctx.marker_cb = grout_main_router_started;
+	grout_sync_inject_marker();
 }
 
 // Run the post-observation action set up by the marker injector.
@@ -334,6 +342,13 @@ static void grout_sync_poll_marker(struct event *e) {
 	}
 
 	grout_ctx.marker_poll_retries++;
+	if (grout_ctx.marker_poll_retries >= GROUT_SYNC_MARKER_MAX_POLLS) {
+		gr_log_err(
+			"sync marker not visible after %u ms; restarting Zebra to retry replay",
+			grout_ctx.marker_poll_retries * GROUT_SYNC_MARKER_POLL_MS
+		);
+		exit(EXIT_FAILURE);
+	}
 	if (grout_ctx.marker_poll_retries % GROUT_SYNC_MARKER_WARN_EVERY == 0) {
 		gr_log_warn(
 			"sync marker still not visible after %u ms; metaQ drain may be slow",
@@ -359,6 +374,8 @@ dispatch:
 // to call before injecting a new marker (covers an interrupted
 // previous reconnect) or after observation (cosmetic cleanup).
 static void grout_sync_cleanup_marker(void) {
+	uint32_t table_id = grout_sync_marker_table_id();
+
 	rib_meta_queue_early_route_cleanup(
 		&grout_sync_marker_prefix,
 #if CURRENT_FRR_VERSION >= MAKE_FRRVERSION(10, 6, 0)
@@ -367,7 +384,7 @@ static void grout_sync_cleanup_marker(void) {
 		VRF_DEFAULT,
 #endif
 #if CURRENT_FRR_VERSION >= MAKE_FRRVERSION(10, 8, 0)
-		rt_table_main_id,
+		table_id,
 #endif
 		ZEBRA_ROUTE_SHARP
 	);
@@ -382,7 +399,7 @@ static void grout_sync_cleanup_marker(void) {
 		NULL, // src_p
 		NULL, // nh
 		0, // nhe_id
-		rt_table_main_id,
+		table_id,
 		0, // metric
 		DISTANCE_INFINITY,
 		false // fromkernel
@@ -396,7 +413,7 @@ static void grout_sync_cleanup_marker(void) {
 //   flags      0              keeps it out of rib_sweep_table predicate
 //   tag        unique id      distinguishes from user routes on ::/128
 //   nexthop    blackhole      inert (entry never installed)
-//   table      rt_table_main_id (Grout remaps the default table from 254 to 0)
+//   table      live default-VRF table (normally 0 after grout_ns_reset)
 static void grout_sync_inject_marker(void) {
 	// Local non-const copy: rib_add_multipath takes a non-const prefix
 	// pointer and may apply_mask in-place.
@@ -404,6 +421,7 @@ static void grout_sync_inject_marker(void) {
 	struct nexthop *nh;
 	struct nexthop_group *ng;
 	struct route_entry *re;
+	uint32_t table_id = grout_sync_marker_table_id();
 
 	nh = nexthop_new();
 	nh->type = NEXTHOP_TYPE_BLACKHOLE;
@@ -419,7 +437,7 @@ static void grout_sync_inject_marker(void) {
 		0, // instance
 		0, // flags
 		0, // nhe_id
-		rt_table_main_id,
+		table_id,
 		0, // metric
 		0, // mtu
 		DISTANCE_INFINITY,

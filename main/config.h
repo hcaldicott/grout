@@ -19,6 +19,7 @@ struct gr_config {
 	unsigned log_level;
 	unsigned log_max_rate; // max LOG_COUNTER() messages per second per counter (0 = unlimited)
 	unsigned max_mtu;
+	unsigned mempool_cache_size;
 	bool test_mode;
 	bool poll_mode;
 	bool adaptive_irq; // --adaptive-irq: adaptive interrupt rx

@@ -10,6 +10,7 @@
 #include <gr_version.h>
 
 #include <rte_log.h>
+#include <rte_mempool.h>
 #include <rte_version.h>
 
 #include <errno.h>
@@ -282,6 +283,11 @@ int config_parse(int argc, char **argv) {
 	ENV_BOOL(skip_route_events_on_iface_down, "GROUT_SKIP_ROUTE_EVENTS_ON_IFACE_DOWN", false);
 	ENV_INT(max_ifaces, "GROUT_MAX_IFACES", 1024, 16, UINT16_MAX);
 	ENV_INT(mempool_chunk_size, "GROUT_MEMPOOL_CHUNK_SIZE", (1 << 16) - 1, 255, (1 << 20) - 1);
+	ENV_INT(mempool_cache_size,
+		"GROUT_MEMPOOL_CACHE_SIZE",
+		RTE_MEMPOOL_CACHE_MAX_SIZE,
+		0,
+		RTE_MEMPOOL_CACHE_MAX_SIZE);
 	ENV_INT(max_nexthops, "GROUT_MAX_NEXTHOPS", 1 << 17, 64, 1 << 24);
 	ENV_INT(max_routes, "GROUT_MAX_ROUTES", 1 << 16, 64, 1 << 24);
 	ENV_INT(max_fdb_entries, "GROUT_MAX_FDB_ENTRIES", 4096, 32, 1 << 24);
@@ -379,6 +385,7 @@ void config_print(void) {
 	    gr_config.skip_route_events_on_iface_down);
 	LOG(INFO, "GROUT_MAX_IFACES=%u", gr_config.max_ifaces);
 	LOG(INFO, "GROUT_MEMPOOL_CHUNK_SIZE=%u", gr_config.mempool_chunk_size);
+	LOG(INFO, "GROUT_MEMPOOL_CACHE_SIZE=%u", gr_config.mempool_cache_size);
 	LOG(INFO, "GROUT_MAX_NEXTHOPS=%u", gr_config.max_nexthops);
 	LOG(INFO, "GROUT_MAX_ROUTES=%u", gr_config.max_routes);
 	LOG(INFO, "GROUT_MAX_FDB_ENTRIES=%u", gr_config.max_fdb_entries);

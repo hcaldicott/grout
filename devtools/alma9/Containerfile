@@ -10,6 +10,7 @@ RUN dnf install -y dnf-plugins-core epel-release && \
 		automake \
 		bison \
 		ccache \
+		clang-tools-extra \
 		codespell \
 		dnsmasq \
 		elfutils-libelf-devel \
@@ -23,6 +24,7 @@ RUN dnf install -y dnf-plugins-core epel-release && \
 		git \
 		graphviz \
 		groff \
+		inotify-tools \
 		iproute \
 		iputils \
 		jq \

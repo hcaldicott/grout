@@ -23,9 +23,9 @@
 %endif
 
 %undefine _debugsource_packages
-# The distro RPM flags apply LTO indiscriminately to subprojects and unit-test
-# binaries. Meson owns LTO scope so shipped Grout targets remain optimized
-# while linker-wrapped tests and bundled DPDK can opt out.
+# Grout uses constructors and linker-defined registration contracts that are
+# not currently safe under LTO. Distro-wide LTO also breaks linker-wrapped
+# unit tests and makes bundled DPDK builds prohibitively expensive.
 %global _lto_cflags %nil
 %global branch main
 %if %{with download}
@@ -145,6 +145,22 @@ export GROUT_VERSION="%{version}-%{release}"
 %check
 %if %{with tests}
 %meson_test
+
+# Unit tests do not exercise the real module-constructor and netlink startup
+# path. Keep a short daemon smoke test here so unsafe compiler/linker
+# optimizations fail the package build before reaching a host.
+grout_bin=$(find . -maxdepth 2 -type f -name grout -perm -111 -print -quit)
+test -n "$grout_bin"
+smoke_socket="$PWD/grout-smoke.sock"
+smoke_log="$PWD/grout-smoke.log"
+set +e
+timeout --signal=TERM 3s "$grout_bin" -t -s "$smoke_socket" \
+	-M tcp:127.0.0.1:0 -- -m 128 >"$smoke_log" 2>&1
+smoke_rc=$?
+set -e
+cat "$smoke_log"
+test "$smoke_rc" -eq 124
+rm -f "$smoke_socket" "$smoke_log"
 %endif
 
 %install

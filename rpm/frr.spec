@@ -174,7 +174,10 @@ EOF
 %systemd_post frr.service
 
 %postun
-%systemd_postun_with_restart frr.service
+# The Grout deployment owns coordinated FRR/dataplane restarts. Restarting FRR
+# from the RPM transaction would flap the routed storage fabric before the
+# rolling playbook has quiesced DRBD.
+%systemd_postun frr.service
 
 %preun
 %systemd_preun frr.service

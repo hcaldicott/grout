@@ -35,7 +35,10 @@ verify_source 35f2cb4328617261db687e1d4e400c7c491b41b3aa4a109d7da9ebff0cf7e402 "
 mkdir -p "$dist" "$stage/grout-$version/subprojects/packagecache"
 git -C "$repo" archive --format=tar HEAD | tar -xf - -C "$stage/grout-$version"
 cp "$dpdk" "$ecoli" "$stage/grout-$version/subprojects/packagecache/"
-tar -C "$stage" -czf "$dist/grout-$version.tar.gz" "grout-$version"
+# COPYFILE_DISABLE prevents AppleDouble sidecars, while --no-xattrs also keeps
+# com.apple.provenance metadata out of the POSIX source archive. GNU tar in the
+# AlmaLinux builder otherwise warns about every such extended header.
+tar --no-xattrs -C "$stage" -czf "$dist/grout-$version.tar.gz" "grout-$version"
 cp "$frr" "$dist/frr-10.6.1.tar.gz"
 cp "$repo/rpm/grout.spec" "$dist/grout.spec"
 cp "$repo/rpm/frr.spec" "$dist/frr.spec"

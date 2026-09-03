@@ -455,6 +455,20 @@ static void fdb_iface_del_cb(uint32_t /*event*/, const void *obj) {
 	}
 }
 
+static void fdb_iface_down_cb(uint32_t /*event*/, const void *obj) {
+	const struct iface *iface = obj;
+	struct fdb_entry *fdb;
+	uint32_t next = 0;
+	const void *key;
+	void *data;
+
+	while (rte_hash_iterate(fdb_hash, &key, &data, &next) >= 0) {
+		fdb = data;
+		if (fdb->iface_id == iface->id && (fdb->flags & GR_FDB_F_LEARN))
+			rte_hash_del_key(fdb_hash, key);
+	}
+}
+
 static void fdb_ageing_cb(evutil_socket_t, short /*what*/, void * /*priv*/) {
 	const struct iface *bridge;
 	struct fdb_entry *fdb;
@@ -534,6 +548,7 @@ RTE_INIT(init) {
 	event_subscribe(GR_EVENT_FDB_ADD, fdb_event_cb);
 	event_subscribe(GR_EVENT_FDB_DEL, fdb_event_cb);
 	event_subscribe(GR_EVENT_FDB_UPDATE, fdb_event_cb);
+	event_subscribe(GR_EVENT_IFACE_STATUS_DOWN, fdb_iface_down_cb);
 	event_subscribe(GR_EVENT_IFACE_REMOVE, fdb_iface_del_cb);
 	event_serializer(GR_EVENT_FDB_ADD, NULL);
 	event_serializer(GR_EVENT_FDB_DEL, NULL);

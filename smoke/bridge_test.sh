@@ -37,6 +37,20 @@ mac=$(ip netns exec n0 cat /sys/class/net/x-p0/address)
 grcli fdb add "$mac" iface p0
 grcli -j fdb show iface p0 static | jq -e --arg mac "$mac" '.[] | select(.mac == $mac)'
 
+# A disconnected bridge member can remain configured (for example, a vhost
+# port after live migration). Learned entries must be withdrawn immediately,
+# while explicitly configured entries remain in place.
+mac=$(ip netns exec n2 cat /sys/class/net/x-p2/address)
+mark_events
+ip -n n2 link set x-p2 down
+wait_event "iface down: p2"
+if grcli -j fdb show iface p2 learn | jq -e --arg mac "$mac" '.[] | select(.mac == $mac)'; then
+	fail "learned fdb entry survived interface down"
+fi
+grcli -j fdb show iface p0 static | jq -e 'length == 1'
+ip -n n2 link set x-p2 up
+wait_event "iface up: p2"
+
 grcli ping 172.16.0.10 count 3 delay 10
 
 ip netns exec n0 ping -i0.01 -c3 -W1 -n 172.16.0.1 || fail "L3 ping n0->bridge failed"

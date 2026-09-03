@@ -382,11 +382,11 @@ static struct api_out route4_add(const void *request, struct api_ctx *) {
 
 	// Address-owned connected routes are authoritative. During control-plane
 	// replay, a routing protocol can transiently offer the same prefix before
-	// Zebra has reconciled the interface address. Do not replace the connected
-	// route: the later protocol withdrawal would otherwise remove the only
-	// route while leaving the address configured.
+	// Zebra has reconciled the interface address. Refuse to replace the
+	// connected route: accepting the add would let the later protocol
+	// withdrawal remove the only route while leaving the address configured.
 	if (is_addr_owned_route(req->vrf_id, req->dest.ip, req->dest.prefixlen))
-		return api_out(0, 0, NULL);
+		return api_out(EBUSY, 0, NULL);
 
 	if (req->nh_id != GR_NH_ID_UNSET) {
 		nh = nexthop_lookup_id(req->nh_id);

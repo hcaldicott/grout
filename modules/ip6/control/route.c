@@ -420,11 +420,6 @@ static struct api_out route6_add(const void *request, struct api_ctx *) {
 	if (req->origin == GR_NH_ORIGIN_INTERNAL)
 		return api_out(EINVAL, 0, NULL);
 
-	// Keep address-owned connected routes authoritative during routing daemon
-	// replay. See the IPv4 handler for the ordering race this prevents.
-	if (is_addr_owned_route(req->vrf_id, GR_IFACE_ID_UNDEF, &req->dest.ip, req->dest.prefixlen))
-		return api_out(0, 0, NULL);
-
 	if (req->nh_id != GR_NH_ID_UNSET) {
 		nh = nexthop_lookup_id(req->nh_id);
 		if (nh == NULL)
@@ -459,6 +454,16 @@ static struct api_out route6_add(const void *request, struct api_ctx *) {
 				created = true;
 			}
 		}
+	}
+
+	// Keep address-owned connected routes authoritative during routing daemon
+	// replay. See the IPv4 handler for the ordering race this prevents. The
+	// check must use the same link-local scoping as the insert below, so it
+	// can only be done once the nexthop interface is known.
+	if (is_addr_owned_route(req->vrf_id, nh->iface_id, &req->dest.ip, req->dest.prefixlen)) {
+		if (created)
+			nexthop_decref(nh);
+		return api_out(EBUSY, 0, NULL);
 	}
 
 	// if route insert fails, the created nexthop will be freed

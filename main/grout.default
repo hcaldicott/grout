@@ -2,8 +2,10 @@
 # Copyright (c) 2024 Robin Jarry
 # vim: ft=sh
 
-# Add grout command line flags here and restart grout.service.
-GROUT_OPTS='--syslog'
+# Add grout command line flags here and restart grout.service. The SE350
+# accelerated-fabric profile uses 9216-byte routed ports and 9000-byte
+# guest/service interfaces.
+GROUT_OPTS='--syslog --max-mtu 9216'
 
 # Path to the control plane API socket (default: /run/grout.sock).
 #GROUT_SOCK_PATH=/run/grout.sock

@@ -6,10 +6,10 @@ use this document as the implementation plan and evidence record.
 
 ## Objective
 
-Build an all-active, DPDK-accelerated EVPN multihoming dataplane for three
+Build an all-active, DPDK-accelerated EVPN multihoming dataplane for four
 switchless hosts. A carrier presents one 802.3ad LAG with one 10 Gb/s member on
 each of two hosts. A VM attached to the carrier bridge may run on any of the
-three hosts and use up to 20 Gb/s of aggregate bandwidth across multiple
+four hosts and use up to 20 Gb/s of aggregate bandwidth across multiple
 flows. A single flow remains limited to one LAG member by the carrier's hash.
 
 FRR owns BGP EVPN, Ethernet Segment state, Designated Forwarder election and
@@ -128,9 +128,12 @@ The working implementation adds a dedicated L2-VTEP nexthop type, reuses the
 existing RCU-safe weighted group representation, adds an optional NHG ID to
 external FDB entries and resolves the current group by ID in the bridge
 datapath. Hardware RSS is used when present. TAP and other devices without RSS
-use the same software L3/L4 Toeplitz fallback as Grout bonds. Resolving by ID
-avoids a stale FDB pointer if FRR deletes and recreates a group during
-convergence.
+use the same software L3/L4 Toeplitz fallback as Grout bonds. A Grout-owned
+dynamic mbuf field now carries that canonical flow identity through EVPN NHG,
+VXLAN, underlay ECMP and RSS-mode LACP selection without forging NIC RSS
+metadata. VXLAN decapsulation rebases canonical metadata on the exposed inner
+frame. Resolving by ID avoids a stale FDB pointer if FRR deletes and recreates
+a group during convergence.
 
 FRR deletes are type/origin-conditional inside the Grout API. If an L2 install
 was rejected because its ID belongs to another object, the later withdrawal
@@ -138,9 +141,10 @@ cannot delete that conflicting object by ID alone.
 
 Acceptance criteria:
 
-- Unit tests cover stable per-flow hashing, distinct UDP flows and hardware RSS
-  precedence; direct smoke covers missing members, member/group deletion order,
-  type preservation and ID reuse.
+- Unit tests cover stable per-flow hashing, distinct UDP flows, hardware RSS
+  import, software fallback ownership, reset/reuse and VXLAN decapsulation;
+  direct smoke covers flood-copy affinity, missing members, member/group
+  deletion order, type preservation and ID reuse.
 - A remote all-active MAC is installed against an L2 NHG, not one arbitrary
   VTEP.
 - Multiple flows use both remote PEs while packets from one flow remain
@@ -229,7 +233,7 @@ migratable SR-IOV.
 
 Acceptance criteria:
 
-- A VM reaches the carrier from each of the three hosts without reconfiguration.
+- A VM reaches the carrier from each of the four hosts without reconfiguration.
 - Live migration preserves established representative TCP and UDP traffic.
 - MAC mobility converges without a duplicate-MAC loop.
 - Loss and packet reordering are measured during pre-copy, switchover and
@@ -295,5 +299,6 @@ qualification.
 6. Add synthetic bridge-VLAN add/update/delete tests and complete bounded
    allocation beyond the current fail-closed single synthetic VLAN.
 
-HASH-001 is intentionally deferred for architectural review. Do not expand the
-current software-RSS shim while the remaining lifecycle work proceeds.
+HASH-001 and META-001 are complete. Ethernet-framed EVPN, VXLAN and RSS-mode
+bond paths use the canonical Ethernet getter; IPv4/IPv6 route, policy, tunnel
+and local ICMP paths use explicit L3-safe lookup or canonical seeding.

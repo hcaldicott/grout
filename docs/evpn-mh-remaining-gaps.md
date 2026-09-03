@@ -6,9 +6,9 @@ This document is the active engineering backlog for the switchless SE350 EVPN
 multihoming project. It records work that remains after the initial Grout and
 FRR prototype and the August 2026 datapath safety review.
 
-The target deployment is three Lenovo SE350 hosts running Grout and FRR. A
+The target deployment is four Lenovo SE350 hosts running Grout and FRR. A
 carrier presents an 802.3ad LAG with one 10 Gb/s member on each of two hosts.
-A 6WIND VM may run on any of the three hosts and must retain Layer-2 access to
+A 6WIND VM may run on any of the four hosts and must retain Layer-2 access to
 the carrier service, including across live migration. Carrier-facing ports,
 inter-host links and VM attachment should remain in a DPDK-accelerated
 datapath.
@@ -34,13 +34,13 @@ This backlog complements:
 
 | ID | Gap | Priority | Status | Production impact |
 | --- | --- | --- | --- | --- |
-| HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Deferred for architecture | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
+| HASH-001 | Grout-owned canonical flow-hash metadata | P0 | Complete | Removes misuse of NIC RSS metadata and guarantees one flow decision across EVPN, VXLAN, underlay ECMP and LACP. |
 | LIFE-001 | L2 NH/NHG lifecycle and failure injection | P0 | Prototype with timeout/partial-replay smoke coverage | Ordering/type invariants, rejection, timeout, fail-closed partial state and repair pass; sanitizer and broader concurrent replacement stress remain. |
 | RESTART-001 | FRR/Zebra/Grout restart reconciliation | P0 | Prototype with daemon and stack-restart coverage | bgpd-only, Zebra dependency restart, and both full-stack replay cases pass; Grout restart and release-duration storms remain. |
 | FRR-001 | Upstream FRR dataplane abstraction changes | P0 | Prototype | The project carries an FRR 10.6.1 fork and rebase burden. |
 | MIG-001 | Migration-compatible VM attachment | P0 | Open | Seamless migration cannot be claimed until vhost-user reconnect and switchover are validated. |
 | VLAN-001 | General bridge-domain/VLAN representation | P1 | Constrained | The current single synthetic VLAN is safe but cannot represent general tagged services. |
-| META-001 | Audit direct `m->hash.rss` consumers | P1 | Open | Some existing Grout nodes assume RSS is always valid even on software-only ingress. |
+| META-001 | Audit direct `m->hash.rss` consumers | P1 | Complete | L3-framed consumers use the canonical getter and local producers seed Grout-owned metadata. |
 | PROTO-001 | Repeated protodown and LACP failure cycles | P1 | Prototype | Long-running convergence and stale-state behavior remain unqualified. |
 | PERF-001 | X710/SE350 line-rate and NUMA qualification | P0 before release | Blocked by lab | Functional simulation cannot establish 10/20 Gb/s throughput or loss characteristics. |
 | OPER-001 | AlmaLinux/OpenNebula packaging and lifecycle | P1 | Open | The prototype is not yet an installable, supportable edge product. |
@@ -49,17 +49,16 @@ This backlog complements:
 
 ### HASH-001: separate Grout flow identity from hardware RSS metadata
 
-**Status:** Deferred for architecture review
+**Status:** Complete
 
 **Priority:** P0
 
 **Origin:** EVPN-MH implementation review
 
-The project has deliberately retained the current software-RSS shim while its
-packet-metadata architecture is reviewed with upstream maintainers and other
-dataplane engineers. Until that decision is made, new code must not broaden
-the shim beyond its existing EVPN-MH path or treat it as a general Grout API.
-The existing forwarding behavior and regression coverage remain in place.
+The implementation uses DPDK dynamic mbuf metadata rather than treating a
+software value as NIC RSS output. Upstream review should confirm whether this
+metadata remains a dynamic field/flag or moves into Grout's fixed private area,
+but the packet-lifetime and ownership contracts are now explicit.
 
 #### Problem
 
@@ -71,27 +70,35 @@ TAP, vhost-user or other devices without hardware RSS.
 
 The EVPN-MH prototype introduced software fallback hashing so that one tenant
 flow selects a stable remote VTEP. To make downstream VXLAN and bond processing
-consume that same value, `bridge_input.c` currently writes the software value
-to `m->hash.rss` and sets `RTE_MBUF_F_RX_RSS_HASH`.
+consume that same value, `bridge_input.c` wrote the software value to
+`m->hash.rss` and set `RTE_MBUF_F_RX_RSS_HASH`.
 
-That behavior is functional but semantically wrong: the DPDK flag means that
+That behavior was functional but semantically wrong: the DPDK flag means that
 the RX device supplied a valid RSS result. Software forwarding code should not
 forge an RX offload result.
 
-#### Required design
+The bug also affected VXLAN traffic that did not traverse an EVPN NHG.
+`rte_pktmbuf_reset()` clears RSS validity but does not clear `m->hash.rss`, and
+`vxlan_output.c` previously read the field unconditionally. Static-VTEP
+unicast and bridge-flood traffic from TAP, vhost-user or another software-only
+ingress could therefore select its VXLAN source port and underlay ECMP path
+using stale metadata from an earlier use of the mbuf.
 
-Register a Grout-owned DPDK mbuf dynamic field containing a 32-bit canonical
-flow hash and a Grout-owned dynamic flag indicating validity.
+#### Implemented design
+
+Grout registers a DPDK mbuf dynamic field containing a 32-bit canonical flow
+hash and a Grout-owned dynamic flag indicating validity.
 
 The canonical hash represents the original tenant flow. It must remain stable
 through bridge forwarding, EVPN NHG selection, VXLAN encapsulation, underlay
 ECMP and LACP member selection.
 
-Provide a small API, with exact names settled during review, equivalent to:
+The API is:
 
 ```c
 bool gr_mbuf_flow_hash_is_valid(const struct rte_mbuf *m);
 uint32_t gr_mbuf_flow_hash_get(struct rte_mbuf *m);
+uint32_t gr_mbuf_flow_hash_get_l3(struct rte_mbuf *m, rte_be16_t eth_type);
 void gr_mbuf_flow_hash_set(struct rte_mbuf *m, uint32_t hash);
 void gr_mbuf_flow_hash_invalidate(struct rte_mbuf *m);
 ```
@@ -106,20 +113,29 @@ void gr_mbuf_flow_hash_invalidate(struct rte_mbuf *m);
 5. never set or clear `RTE_MBUF_F_RX_RSS_HASH` merely because software
    calculated a value.
 
+The Ethernet getter and stateless calculator require `mtod` to point at an
+Ethernet frame. The separate L3 getter requires `mtod` to point at the IPv4 or
+IPv6 header identified by its EtherType argument.
+
+After VXLAN decapsulation, an RX RSS result is treated as outer-scoped even
+though Grout requests innermost RSS: PMD support is not universal. Immediately
+after exposing the inner Ethernet frame, `vxlan_input.c` recalculates and sets
+canonical metadata when hardware RSS is present, without changing the
+hardware field or flag. When hardware RSS is absent, it invalidates canonical
+metadata so a later consumer calculates it lazily from the inner frame.
+
 DPDK dynamic metadata is preferred over enlarging or repurposing Grout's fixed
 mbuf private area because DPDK copies dynamic fields during mbuf copy/clone
 operations and resets the associated dynamic validity flag when an mbuf is
 reused.
 
-#### Consumers to migrate
+#### Migrated consumers
 
 - EVPN L2 NHG/VTEP selection in `modules/l2/datapath/bridge_input.c`;
 - VXLAN UDP source-port selection in `modules/l2/datapath/vxlan_output.c`;
 - VXLAN underlay IPv4/IPv6 route lookup in the same node;
 - RSS-mode LACP member selection in
   `modules/infra/datapath/bond_output.c`;
-- any other consumer identified by META-001 for which software fallback is
-  valid.
 
 Explicit L2-only and explicit L3/L4 bond algorithms may continue to calculate
 their requested hash mode independently. The canonical hash is specifically
@@ -131,6 +147,8 @@ the end-to-end flow identity used where RSS semantics are requested.
 - Software fallback must not set `RTE_MBUF_F_RX_RSS_HASH`.
 - Encapsulation must not cause the canonical hash to be recalculated from the
   outer VXLAN headers.
+- Decapsulation must not import an outer-tunnel RSS value as tenant-flow
+  identity.
 - Packet copies and bridge-flood copies must retain canonical metadata.
 - Freshly allocated or recycled mbufs must not inherit valid stale metadata.
 - First and subsequent IPv4 fragments of one datagram must retain the same
@@ -143,35 +161,56 @@ the end-to-end flow identity used where RSS semantics are requested.
 - Unit test: software fallback leaves NIC RSS fields and flags unchanged.
 - Unit test: two distinct L4 flows normally produce distinct fallback hashes.
 - Unit test: first and later IPv4 fragments produce the same hash.
-- Unit test: a copied mbuf retains valid canonical metadata.
 - Unit test: mbuf reset/reuse clears canonical validity.
+- Unit test: VXLAN decapsulation quarantines an outer RSS result and reseeds
+  canonical metadata from the inner frame.
+- Smoke test: software-ingress bridge-flood copies use the intended VTEPs and
+  retain one canonical VXLAN source port.
 - Datapath test: EVPN NHG, VXLAN source port, underlay ECMP and LACP consume the
   same canonical value.
 - Regression: all existing unit and three-node EVPN-MH/LACP tests remain green.
 
+Validation completed with all Meson tests, the IPv4 and IPv6 static VXLAN
+smokes, the EVPN-MH/LACP smokes and the software-ingress flood-copy affinity
+assertion passing.
+
 #### Completion condition
 
-No EVPN-MH path writes a software value into `m->hash.rss`, and no code sets
-`RTE_MBUF_F_RX_RSS_HASH` unless the value originated from an RX device or an
-explicit DPDK-compliant producer.
+No software path writes a generated value into `m->hash.rss` or sets
+`RTE_MBUF_F_RX_RSS_HASH`. Hardware RSS remains imported only through the
+canonical flow-hash abstraction.
 
 ### META-001: audit existing direct RSS consumers
 
-**Status:** Open
+**Status:** Complete
 
 **Priority:** P1
 
-Search all direct reads of `m->hash.rss` and classify them as:
+The audit classified all direct reads of `m->hash.rss` as:
 
 1. hardware-RSS-only by design;
 2. should consume the Grout canonical flow hash;
 3. should calculate a specific L2 or L3/L4 hash;
 4. locally generated traffic that must explicitly seed canonical metadata.
 
-The initial audit must include VXLAN, IPv4/IPv6 route lookups, policy/NAT,
-IP-in-IP, SRv6 and locally generated ICMP traffic. This is partly inherited
-technical debt in upstream Grout and should be proposed separately from the
-narrow EVPN-MH patch if that makes upstream review easier.
+The resulting `gr_mbuf_flow_hash_get_l3()` API has the same cache and genuine
+hardware-RSS import precedence as the Ethernet getter, but calculates its
+software fallback from an explicitly identified IPv4 or IPv6 header at
+`mtod`. IPv4/IPv6 input and ICMP output, policy/NAT, IP-in-IP and SRv6 now use
+that API. Nodes that transform or prepend headers acquire the canonical hash
+while the original L3 header is still exposed, preserving the tenant-flow
+identity across the transformation.
+
+The IPv4/IPv6 local ping generators seed the canonical field with their
+identifier to retain ECMP and active/active bond distribution without writing
+NIC-owned RSS metadata or setting `RTE_MBUF_F_RX_RSS_HASH`.
+
+There are no direct RSS-field consumers or software RSS-flag producers outside
+the canonical flow-hash implementation and its tests. The full build and all
+Meson tests pass, as do the IPv4/IPv6 local ICMP, forwarding, load-balancing,
+DNAT and IP-in-IP smokes. The SRv6 smoke cannot run in the current container
+because its kernel rejects the Linux `seg6local` fixture before traffic reaches
+Grout; the affected Grout SRv6 module builds successfully.
 
 ## Workstream 2: bridge-domain representation
 
@@ -187,11 +226,13 @@ services enter scope
 FRR requires VLAN/VNI metadata for EVPN-MH ES-to-EVI association, while Grout's
 bridge model is VLAN-abstracted. The prototype presents every applicable
 bridge to FRR using one synthetic VLAN and translates that representation back
-to Grout's untagged bridge domain.
+to Grout's untagged bridge domain. Grout's numeric key 0 is internal provider
+metadata; it does not request or emit an IEEE 802.1Q VLAN ID 0 priority tag on
+a fabric or carrier port.
 
 Unsupported tagged state now fails visibly instead of silently collapsing into
-VLAN 0. This makes the current untagged product safe, but it is not general
-per-VLAN bridging.
+the internal untagged-domain key 0. This makes the current untagged product
+safe, but it is not general per-VLAN bridging.
 
 #### Remaining work
 
@@ -407,7 +448,7 @@ carrier and fabric ports remain under Grout/DPDK control.
 
 #### Acceptance tests
 
-- VM migrates among SE350-1, SE350-2 and SE350-3 without changing its carrier
+- VM migrates among SE350-1, SE350-2, SE350-3 and SE350-4 without changing its carrier
   VLAN attachment or MAC identity.
 - Existing TCP sessions survive the switchover.
 - UDP loss and reordering remain within a ratified threshold.
@@ -479,9 +520,8 @@ The following findings are closed and should remain regression-tested:
 7. **PERF-001 / OPER-001** — qualify physical hardware and integrate with
    OpenNebula for production rollout.
 
-HASH-001 and implementation changes arising from META-001 remain deferred
-pending architectural review. A read-only consumer audit may continue, but it
-must not expand or normalize the current software-RSS shim.
+HASH-001 and META-001 are complete. Upstream review should consider the
+canonical metadata and its Ethernet/L3 framing contracts together.
 
 ## Definition of production-ready
 

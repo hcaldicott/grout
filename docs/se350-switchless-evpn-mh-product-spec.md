@@ -13,7 +13,7 @@
 | Upstream repository | `https://github.com/DPDK/grout` |
 | Upstream baseline | `cd71aea5` |
 | Target host OS | AlmaLinux 9.8 x86_64 |
-| Current development environment | AlmaLinux 9.8 arm64 container, three isolated Grout/FRR nodes |
+| Current development environment | Three isolated Grout/FRR nodes; OBS staging builds targeting AlmaLinux 9.8 x86_64 |
 | Primary audience | Network architects, DPDK/Grout developers, FRR reviewers, OpenNebula integrators, SREs and hardware-validation engineers |
 
 This document is intentionally both a product specification and an engineering
@@ -1443,7 +1443,7 @@ live migration.
 
 | Capability | State | Evidence/qualification |
 | --- | --- | --- |
-| AlmaLinux 9.8 arm64 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build natively with generic CPU target. |
+| AlmaLinux 9.8 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build for the AlmaLinux 9.8 target. |
 | Unit suite | Pass | 12 Meson unit tests, including flow hash and bridge policy. |
 | Three-node BGP EVPN | Pass | EVPN peers establish and exchange routes. |
 | VXLAN bridge | Pass | Bidirectional host traffic crosses node 1 to node 3. |
@@ -1475,7 +1475,7 @@ live migration.
 | Area | Files |
 | --- | --- |
 | Development evidence | `docs/evpn-mh-development.md` |
-| AlmaLinux build environment | `devtools/alma9.sh`, `devtools/alma9/Containerfile`, `devtools/alma9/README.md` |
+| AlmaLinux packaging | `rpm/grout.spec`, `rpm/frr.spec`, `packaging/obs/` |
 | Three-node functional lab | `smoke/evpn_three_node_frr_test.sh`, `smoke/evpn_three_node_frr_ipv6_test.sh` |
 | Split-chassis LACP probe | `smoke/evpn_mh_lacp_test.sh` |
 | FRR interface/VLAN representation | `frr/if_grout.c` |
@@ -1956,13 +1956,14 @@ or deliberately imported.
 
 ### 21.2 Reproduce the present evidence
 
-Use the AlmaLinux development wrapper documented in `devtools/alma9/README.md`.
-The functional lab needs privileges for network namespaces, TAP devices and
-FRR. Run the existing unit suite, the split-chassis LACP probe and the
-three-node EVPN-MH smoke test before changing object models.
+Build AlmaLinux 9 packages through the OBS staging pipeline documented in
+`packaging/obs/README.md`. The functional lab needs privileges for network
+namespaces, TAP devices and FRR. Run the existing unit suite, the
+split-chassis LACP probe and the three-node EVPN-MH smoke test before changing
+object models.
 
-Do not interpret arm64 TAP results as throughput results. Repeat release
-candidates on `linux/amd64` before physical SE350 testing.
+Do not interpret TAP-based lab results as throughput results. Validate release
+candidates on physical SE350 hardware.
 
 ### 21.3 Recommended immediate next task
 

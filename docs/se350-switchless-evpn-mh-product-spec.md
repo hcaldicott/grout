@@ -32,15 +32,15 @@ production qualification.
 ## 1. Executive summary
 
 The product is a compact, switchless edge-compute and routing platform built
-from three Lenovo ThinkSystem SE350 servers in each datacenter. Each SE350 is
+from four Lenovo ThinkSystem SE350 servers in each datacenter. Each SE350 is
 expected to provide two integrated 10 GbE ports and one Intel X710-DA4
-four-port 10 GbE adapter. The three hosts form their own DPDK-forwarded fabric;
+four-port 10 GbE adapter. The four hosts form their own DPDK-forwarded fabric;
 no external top-of-rack or MLAG switch pair is added.
 
 Each carrier supplies two physical 10 GbE handoffs. The handoffs terminate on
 two different SE350s and appear to the carrier as members of one ordinary IEEE
 802.3ad LACP bundle. A 6WIND router VM attaches to the resulting Layer-2
-service and may run on any of the three SE350s. The target is up to 20 Gb/s of
+service and may run on any of the four SE350s. The target is up to 20 Gb/s of
 aggregate carrier bandwidth across multiple flows, while a single flow remains
 limited by LAG hashing to one 10 Gb/s member.
 
@@ -78,10 +78,11 @@ This is not yet production-ready. In particular:
    on a host that also owns one local carrier member. Meeting the strict
    20 Gb/s-from-any-host requirement requires a deliberate distributed-egress
    extension in Grout or a different termination model.
-5. A two-port-per-host 10 GbE triangle has exactly 20 Gb/s of host fabric
-   capacity before encapsulation and operational overhead. It has no spare
-   line-rate capacity for migration traffic or a fabric-link failure. QoS,
-   accepted degradation, additional fabric capacity, or faster links are
+5. A two-port-per-host four-node 10 GbE routed ring gives each host 20 Gb/s of
+   physical adjacency before encapsulation and operational overhead, but some
+   destinations require transit through another SE350. It has no spare
+   per-host line-rate capacity for migration traffic or a fabric-link failure.
+   QoS, accepted degradation, additional fabric capacity, or faster links are
    required.
 6. The Intel X710-DA4 is a deployment assumption, not an adapter listed in the
    Lenovo SE350 supported-adapter table reviewed for this handoff. Physical fit,
@@ -176,13 +177,13 @@ migration-safe VM edge.
 
 The completed product MUST:
 
-1. Operate as three SE350 compute/network nodes without an external datacenter
+1. Operate as four SE350 compute/network nodes without an external datacenter
    switch in the carrier datapath.
 2. Terminate each carrier's two 10 GbE LACP members on two distinct hosts.
 3. Present a stable LACP system identity and aggregator to the carrier.
 4. Keep the carrier, fabric and VM service packet path DPDK accelerated.
 5. Provide the same carrier VLAN-backed Layer-2 service to a 6WIND VM on any of
-   the three hosts.
+   the four hosts.
 6. Make up to 20 Gb/s aggregate carrier capacity available to the VM across
    multiple suitably distributed flows in the healthy topology.
 7. Preserve per-flow ordering under steady state.
@@ -204,7 +205,7 @@ The first release is not required to:
 
 - provide a general-purpose replacement for every switch feature;
 - implement STP, MSTP or arbitrary Layer-2 ring protection;
-- support more than three PEs in one edge cluster;
+- support more than four PEs in one edge cluster;
 - support more than two physical carrier members per carrier LAG;
 - provide hitless in-service software upgrade of Grout itself;
 - live-migrate a directly assigned X710 VF;
@@ -219,7 +220,7 @@ The first release is not required to:
 ### 3.3 Success definition
 
 Success is not merely BGP convergence. The release is successful only when the
-physical three-node system, a real or standards-compliant carrier LACP peer,
+physical four-node system, a real or standards-compliant carrier LACP peer,
 the Grout dataplane, FRR, QEMU/libvirt, OpenNebula and the 6WIND guest pass the
 end-to-end acceptance matrix in section 17.
 
@@ -256,7 +257,7 @@ requests.
 
 ### 5.1 Physical and hardware requirements
 
-- **HW-001**: Each site MUST contain three SE350 nodes with identical CPU,
+- **HW-001**: Each site MUST contain four SE350 nodes with identical CPU,
   firmware, BIOS, microcode, memory topology and supported virtualization
   configuration for live migration.
 - **HW-002**: Each node is assumed to provide two integrated 10 GbE ports and
@@ -276,16 +277,19 @@ requests.
 ### 5.2 Topology requirements
 
 - **TOP-001**: The inter-host topology MUST be loop-free at Layer 2. The
-  recommended topology is a routed IP triangle, not a bridged Ethernet ring.
-- **TOP-002**: Each host MUST have direct 10 GbE fabric connectivity to each of
-  the other two hosts in the baseline layout.
+  deployment topology is a four-node routed IP ring: every physical edge is a
+  separate `/31`, never a bridged Ethernet ring.
+- **TOP-002**: Each host MUST have direct 10 GbE fabric connectivity to its two
+  ring neighbours and routed reachability to both non-neighbour VTEPs.
 - **TOP-003**: Each carrier LAG's physical members MUST terminate on two
   different hosts and failure domains.
 - **TOP-004**: No single carrier optic, cable, PCI function or host failure may
   remove both members of the same carrier LAG.
-- **TOP-005**: Underlay MTU MUST accommodate the service frame plus VXLAN, UDP,
-  IP and Ethernet overhead without fragmentation. A jumbo underlay is strongly
-  recommended.
+- **TOP-005**: Routed fabric interfaces MUST use an MTU of 9,216 bytes.
+  VXLAN service bridges, vhost-user ports and guests MUST use an MTU of 9,000
+  bytes. This accommodates a 9,000-byte guest IP packet inside IPv4 or IPv6
+  VXLAN, including an inner 802.1Q tag, without fragmentation. Grout MUST start
+  with `--max-mtu 9216` or a larger explicitly qualified value.
 - **TOP-006**: Migration/control traffic sharing fabric ports MUST be placed in
   a distinct traffic class or otherwise rate-limited so it cannot starve
   LACP/BGP/BFD or carrier forwarding.
@@ -342,7 +346,7 @@ requests.
 - **DP-005**: A single ordered flow MUST remain on one path unless that path
   fails. Rehashing after failure MAY reorder a bounded number of packets.
 - **DP-006**: The healthy system MUST demonstrate aggregate use of both carrier
-  members from a VM on SE350-1, SE350-2 and SE350-3 separately.
+  members from a VM on SE350-1, SE350-2, SE350-3 and SE350-4 separately.
 - **DP-007**: The target is 20 Gb/s nominal aggregate link capacity. Measured
   application throughput MUST be stated separately for each direction, packet
   size and flow distribution; “20 Gb/s” MUST NOT be reported as single-flow or
@@ -444,31 +448,147 @@ The final mapping MUST be generated from PCI BDFs, not inferred from port
 labels. Each node's BDF, NUMA node, IOMMU group, driver, permanent MAC, optic,
 peer and cable label MUST be in the site inventory.
 
-### 6.2 Recommended three-host fabric
+### 6.2 Melbourne four-host fabric
 
-The two integrated 10 GbE ports form a physical triangle:
+The two integrated 10 GbE X722 ports form a four-node physical ring:
 
 ```text
-                       10 GbE
-              SE350-1 ----------- SE350-2
-                 \                    /
-                  \                  /
-             10 GbE\                /10 GbE
-                    \              /
-                       SE350-3
+          10.1.0.16/31                 10.1.0.18/31
+  SE350-1 ------------- SE350-2 ---------------- SE350-3
+     |                                                |
+     |                                                |
+     | 10.1.0.22/31                     10.1.0.20/31  |
+     +----------------- SE350-4 ----------------------+
 ```
 
-Each edge is an IP-routed point-to-point link. No fabric port is placed in a
-common Layer-2 ring and STP is not part of the design. Each host advertises a
-stable VTEP loopback through the underlay. The first implementation SHOULD use
-one of these reviewed models:
+This is a ring only in the physical graph. Each edge is a distinct IP-routed
+point-to-point link; no fabric port is placed in a common Layer-2 segment and
+STP is not part of the design. Transit between non-neighbours is an ordinary
+Grout L3 dataplane operation.
 
-- numbered `/31` links with OSPF and BFD, plus iBGP EVPN among loopbacks; or
-- numbered `/31` links with eBGP underlay/overlay and an explicit routing
-  policy.
+The physical mapping was verified on 16 August 2026 using raw Ethernet probes
+before VFIO binding:
 
-Static routes MAY be used only in the first physical bring-up. They are not the
-preferred production failure-detection mechanism.
+| Link | Endpoint A | Endpoint B |
+| --- | --- | --- |
+| `mel-edge-fabric-12` | SE350-1 `eno1`, `0000:b5:00.0` | SE350-2 `eno1`, `0000:b5:00.0` |
+| `mel-edge-fabric-23` | SE350-2 `eno2`, `0000:b5:00.1` | SE350-3 `eno1`, `0000:b5:00.0` |
+| `mel-edge-fabric-34` | SE350-3 `eno2`, `0000:b5:00.1` | SE350-4 `eno1`, `0000:b5:00.0` |
+| `mel-edge-fabric-41` | SE350-4 `eno2`, `0000:b5:00.1` | SE350-1 `eno2`, `0000:b5:00.1` |
+
+All eight endpoints negotiated 10,000 Mb/s. Each function is on NUMA node 0
+and has an independent IOMMU group. Management remains on `eno4` and does not
+depend on this fabric.
+
+#### 6.2.1 Address allocation
+
+MEL-NXT-M1 reserves `10.1.0.0/24` for its accelerated edge fabric. It does not
+overlap the site's management (`10.1.10.0/24`), storage
+(`10.1.11.0/24`), migration (`10.1.12.0/24`) or workload networks.
+
+| Purpose | Pool | Allocation |
+| --- | --- | --- |
+| Stable VTEP/router identities | `10.1.0.0/28` | one `/32` per host |
+| Physical point-to-point links | `10.1.0.16/28` | one `/31` per link |
+| Future fabric expansion | remainder of `10.1.0.0/24` | unallocated |
+
+The assigned VTEP loopbacks are:
+
+| Host | VTEP loopback | FRR router ID |
+| --- | --- | --- |
+| SE350-1 | `10.1.0.1/32` | `10.1.0.1` |
+| SE350-2 | `10.1.0.2/32` | `10.1.0.2` |
+| SE350-3 | `10.1.0.3/32` | `10.1.0.3` |
+| SE350-4 | `10.1.0.4/32` | `10.1.0.4` |
+
+The assigned `/31` endpoints are:
+
+| Link | Subnet | Endpoint A | Endpoint B |
+| --- | --- | --- | --- |
+| SE350-1—SE350-2 | `10.1.0.16/31` | SE350-1 `10.1.0.16` | SE350-2 `10.1.0.17` |
+| SE350-2—SE350-3 | `10.1.0.18/31` | SE350-2 `10.1.0.18` | SE350-3 `10.1.0.19` |
+| SE350-3—SE350-4 | `10.1.0.20/31` | SE350-3 `10.1.0.20` | SE350-4 `10.1.0.21` |
+| SE350-4—SE350-1 | `10.1.0.22/31` | SE350-4 `10.1.0.22` | SE350-1 `10.1.0.23` |
+
+The underlay uses OSPF area 0 on the `/31` interfaces, with each VTEP loopback
+passive in OSPF. BFD runs only between directly connected neighbours. BGP EVPN
+uses a four-node iBGP full mesh sourced from the loopbacks; this is six BGP
+sessions and does not yet require route reflectors. Static routes MAY be used
+only for isolated bring-up diagnostics.
+
+The routed fabric MTU is 9,216 bytes and the guest/service MTU is 9,000 bytes.
+The underlay provides 216 bytes above the guest MTU. IPv6 VXLAN with an inner
+802.1Q tag consumes at most 74 bytes, leaving 142 bytes of additional margin.
+Grout starts with `--max-mtu 9216`; each physical fabric port is configured at
+9,216 and each VXLAN service bridge, vhost-user port and guest at 9,000.
+
+#### 6.2.2 Three-node switchless triangle profile
+
+The four-node Melbourne ring is the current verified deployment, but the same
+architecture supports a three-node switchless (edgeless) triangle. Each SE350
+uses both integrated 10 GbE ports and connects directly to both peers:
+
+```text
+                         SE350-1
+                        /       \
+       10.S.0.16/31    /         \    10.S.0.20/31
+                      /           \
+                 SE350-2---------SE350-3
+                       10.S.0.18/31
+```
+
+Every cable is an independent untagged routed Layer-3 adjacency. The triangle
+is not a bridge, bond, shared VLAN or MLAG. In the healthy state, every pair of
+hosts is one physical hop apart; after any one link failure, all hosts remain
+connected through the other two links.
+
+The site-specific allocation is deterministic:
+
+| Purpose | Node or link | Address/prefix |
+| --- | --- | --- |
+| VTEP/router ID | SE350-1 | `10.S.0.1/32` |
+| VTEP/router ID | SE350-2 | `10.S.0.2/32` |
+| VTEP/router ID | SE350-3 | `10.S.0.3/32` |
+| Routed link | SE350-1—SE350-2 | `10.S.0.16/31`: node1 `.16`, node2 `.17` |
+| Routed link | SE350-2—SE350-3 | `10.S.0.18/31`: node2 `.18`, node3 `.19` |
+| Routed link | SE350-3—SE350-1 | `10.S.0.20/31`: node3 `.20`, node1 `.21` |
+
+OSPF area 0 and single-hop BFD run on all three `/31` links. The VTEP
+loopbacks are passive in OSPF and source a three-node iBGP EVPN full mesh,
+which contains three BGP sessions. The MTU contract is 9,216 bytes on the
+physical fabric and 9,000 bytes for guest service interfaces. ECMP MAY use
+both equal-cost paths when the topology and installed routes permit it, but
+the design does not claim that one VM flow exceeds a single 10 GbE member.
+
+The triangle has no healthy-state transit between host pairs and uses three
+cables. The four-node ring uses four cables but requires routed transit for
+non-neighbours. Both survive one physical-link failure; a node failure reduces
+the available hosting and carrier attachment set and is handled by EVPN-MH,
+OpenNebula VM recovery/migration policy and the remaining routed topology.
+
+#### 6.2.3 Untagged wire and TEP boundary
+
+The switchless underlay is untagged: its frames contain no 802.1Q header.
+Fabric ports MUST therefore have no VLAN subinterface, VLAN-aware bridge, SVI
+or shared Layer-2 gateway.
+
+The `10.S.0.N/32` TEP/VTEP address is a loopback advertised over the untagged
+`/31` adjacencies. Overlay service VLANs, EVIs and tenant/customer networks are
+carried inside VXLAN over that routed reachability. They do not turn the
+underlay into a shared VLAN.
+
+The Grout provider's internal numeric bridge key `0` is a software abstraction
+for its current untagged bridge domain. It MUST NOT be interpreted as an
+instruction to transmit an IEEE 802.1Q VID 0 tag on a physical fabric or
+carrier wire. A conventional
+switch-backed TEP profile uses the same `10.S.0.0/24` aggregate and is
+presented untagged to hosts. `10.S.0.0/28` remains the VTEP loopback pool;
+`10.S.0.16/28` becomes one shared transit subnet, with nodes 1-4 using
+`.17-.20/28`, instead of being divided into `/31` links. The switch maps its
+access ports to a site-local VLAN ID in the range 1-4094, but that identifier
+is internal switch metadata and has no national formula. Literal IEEE VID 0
+is not configured. The switched and switchless interpretations of the common
+aggregate are mutually exclusive within a cluster.
 
 ### 6.3 Example carrier placement
 
@@ -479,23 +599,27 @@ The site has three or four external carrier constructs:
 - Opticomm;
 - EdgeIX, where ordered.
 
-The example below balances four dual handoffs as 3/3/2 X710 ports. It is a
+The example below balances four dual handoffs as two X710 ports per host. It is a
 planning example, not a carrier order.
 
 | Host | X710 port | Assignment | Paired endpoint |
 | --- | --- | --- | --- |
 | SE350-1 | `carrier-0` | Virtutel member A | SE350-2 `carrier-0` |
-| SE350-1 | `carrier-1` | Megaport member A | SE350-3 `carrier-0` |
-| SE350-1 | `carrier-2` | EdgeIX member A | SE350-2 `carrier-2` |
+| SE350-1 | `carrier-1` | EdgeIX member B | SE350-4 `carrier-1` |
+| SE350-1 | `carrier-2` | Spare | — |
 | SE350-1 | `carrier-3` | Spare | — |
 | SE350-2 | `carrier-0` | Virtutel member B | SE350-1 `carrier-0` |
-| SE350-2 | `carrier-1` | Opticomm member A | SE350-3 `carrier-1` |
-| SE350-2 | `carrier-2` | EdgeIX member B | SE350-1 `carrier-2` |
+| SE350-2 | `carrier-1` | Megaport member A | SE350-3 `carrier-0` |
+| SE350-2 | `carrier-2` | Spare | — |
 | SE350-2 | `carrier-3` | Spare | — |
-| SE350-3 | `carrier-0` | Megaport member B | SE350-1 `carrier-1` |
-| SE350-3 | `carrier-1` | Opticomm member B | SE350-2 `carrier-1` |
+| SE350-3 | `carrier-0` | Megaport member B | SE350-2 `carrier-1` |
+| SE350-3 | `carrier-1` | Opticomm member A | SE350-4 `carrier-0` |
 | SE350-3 | `carrier-2` | Spare | — |
 | SE350-3 | `carrier-3` | Spare | — |
+| SE350-4 | `carrier-0` | Opticomm member B | SE350-3 `carrier-1` |
+| SE350-4 | `carrier-1` | EdgeIX member A | SE350-1 `carrier-1` |
+| SE350-4 | `carrier-2` | Spare | — |
+| SE350-4 | `carrier-3` | Spare | — |
 
 For each carrier, the two endpoints MUST use the same Grout LACP system MAC,
 system priority and actor key, but different actor port identities. Different
@@ -511,19 +635,21 @@ consume only one VLAN or one EVI until the carrier handoff document is reviewed.
 With four dual carrier handoffs:
 
 - carrier endpoints consume eight X710 ports across the site;
-- the fabric triangle consumes all six integrated 10 GbE ports;
-- ten of eighteen assumed 10 GbE ports are occupied;
-- spare ports are unevenly distributed: one on SE350-1, one on SE350-2 and two
-  on SE350-3 in the example.
+- the fabric ring consumes all eight integrated 10 GbE ports;
+- sixteen of twenty-four assumed 10 GbE ports are occupied;
+- two X710 ports remain spare on each host in the balanced example.
 
-The triangle can deliver 20 Gb/s aggregate to a host by using both of its
-10 GbE peer links. That is a no-failure theoretical ceiling. VXLAN/IP overhead,
-packet-size effects and control traffic reduce usable payload capacity.
+The ring gives every host two 10 GbE physical adjacencies. That is a no-failure
+20 Gb/s theoretical ingress/egress ceiling, not a guarantee of 20 Gb/s to
+every particular remote VTEP pair. OSPF path selection, transit contention,
+VXLAN/IP overhead, packet-size effects and control traffic reduce usable
+payload capacity.
 
 Consequences that MUST be reflected in the product promise:
 
-- loss of one fabric link can reduce a host to 10 Gb/s direct capacity or force
-  traffic through a shared two-hop path;
+- loss of one fabric link turns the ring into a routed chain and can reduce a
+  host to 10 Gb/s direct capacity or force traffic through multiple transit
+  nodes;
 - a full-rate 20 Gb/s workload leaves no fabric headroom for memory migration;
 - a host-to-host migration stream can contend with carrier traffic unless it is
   rate-limited or a separate/faster fabric is added;
@@ -682,14 +808,17 @@ state is visible through `grcli`, the interface `protodown` flag and the
 
 ### 9.1 What standard EVPN-MH provides
 
-When the VM is on the third, non-attached host, a carrier-side MAC advertised
-with the ESI can resolve to two remote VTEPs. Grout's current prototype installs
-a two-member L2 NHG and hashes different flows across both PEs. The lab proves
-that both paths are used and one can be withdrawn.
+When the VM is on either non-attached host, a carrier-side MAC advertised with
+the ESI can resolve to two remote VTEPs. Grout's current prototype installs a
+two-member L2 NHG and hashes different flows across both PEs. The three-node lab
+proves that both paths are used and one can be withdrawn.
 
 Carrier-to-VM traffic can likewise enter on either carrier member and traverse
-the direct fabric link from that PE to the VM host. The triangle therefore has
-the topology needed for 10 + 10 Gb/s aggregate in the healthy case.
+the routed ring toward the VM host. Each host has two 10 GbE adjacencies, so the
+physical graph can carry 10 + 10 Gb/s aggregate in a healthy, suitably balanced
+case. The four-node qualification MUST verify that OSPF next-hop selection and
+EVPN NHG selection do not correlate flows onto one shared ring edge and that a
+transit node does not become the unintended bottleneck.
 
 ### 9.2 The local-bias gap
 
@@ -833,7 +962,7 @@ virtqueue or one unpinned worker. The host profile must define:
 - descriptor counts and mbuf pool sizing;
 - checksum, VLAN and segmentation offload policy.
 
-All three hosts MUST advertise the same effective guest feature set. A VM may
+All four hosts MUST advertise the same effective guest feature set. A VM may
 not migrate to a host that would negotiate different virtio features or fewer
 queues.
 
@@ -1000,7 +1129,7 @@ model needs at least:
 | `GROUT_VLAN_MODE` | Access, trunk or per-service presentation |
 | `GROUT_ALLOWED_VLANS` | Validated service VLAN set |
 | `GROUT_QUEUES` | vhost/virtio queue-pair count |
-| `GROUT_MTU` | Guest/service MTU |
+| `GROUT_MTU` | Guest/service MTU; `9000` for the accelerated fabric profile |
 | `GROUT_PROFILE` | Versioned host-network capability profile |
 | `GROUT_SOCKET_ROOT` | Controlled runtime socket directory |
 | `GROUT_NUMA_POLICY` | Required/allowed NUMA placement |
@@ -1078,7 +1207,8 @@ virtual-switch process.
 
 FRR's EVPN-MH logic expects a VLAN-aware bridge association between access
 ports, VXLAN and VNI. Grout's bridge model is VLAN-abstracted and commonly uses
-VLAN 0 at its FDB API boundary.
+the numeric key 0 at its FDB API boundary. This is an internal identifier for
+an untagged bridge domain, not an IEEE 802.1Q VLAN ID 0 tag on the wire.
 
 The prototype in `frr/if_grout.c` reports one bounded synthetic VLAN for a Grout
 bridge and its members, then translates it back to VLAN 0 when programming
@@ -1096,7 +1226,8 @@ Remaining requirements:
 
 The provider rejects any FRR MAC operation whose VLAN is not
 `GROUT_BRIDGE_VLAN`; unsupported tagged service state therefore fails visibly
-instead of being silently collapsed into Grout VLAN 0.
+instead of being silently collapsed into Grout's internal untagged-domain key
+0.
 
 ### 13.3 FRR Layer-2 nexthop dataplane patch
 
@@ -1139,7 +1270,8 @@ The fork adds:
 - FRR provider translation from L2 NH/NHG contexts to Grout objects;
 - bridge datapath resolution of the current group by ID;
 - stable flow hashing using hardware RSS when available and software Toeplitz
-  otherwise.
+  otherwise, cached in Grout-owned mbuf metadata rather than forged NIC RSS
+  state.
 
 Resolving the group by ID at packet time avoids retaining a stale FDB pointer
 when FRR deletes and recreates a group. Group and policy changes use existing
@@ -1431,7 +1563,7 @@ Exit criteria:
 
 Deliverables:
 
-1. benchmark standard EVPN behavior from all three source hosts;
+1. benchmark standard EVPN behavior from all four source hosts;
 2. prototype the recommended provenance-aware mixed local/remote egress group;
 3. in parallel or as a short spike, test transparent dual circuits with LACP
    terminated in 6WIND;
@@ -1477,7 +1609,7 @@ Deliverables:
 3. migration preflight and rollback hooks;
 4. Grout virtual-network driver or equivalent integration;
 5. OpenNebula template/profile and scheduler labels;
-6. three-way migration matrix: 1→2, 1→3, 2→1, 2→3, 3→1, 3→2;
+6. all twelve ordered migrations among four hosts;
 7. repeated round-robin soak test.
 
 Exit criteria:
@@ -1494,7 +1626,7 @@ Deliverables:
 1. hardware inventory and support exception decision;
 2. AlmaLinux 9.8 x86_64 packages;
 3. VFIO/IOMMU, hugepage and NUMA configuration;
-4. real triangle underlay and physical carrier LACP peer;
+4. real four-node routed-ring underlay and physical carrier LACP peer;
 5. optical/link failure matrix;
 6. line-rate and packet-size performance matrix;
 7. migration under idle, moderate and near-saturation load;
@@ -1541,13 +1673,13 @@ Deliverables:
 - policy cleanup on interface deletion;
 - vhost connect/disconnect and queue-state events.
 
-**Three-node namespace tests**
+**Three-node regression namespace tests**
 
 - BGP EVPN route exchange;
 - carrier LACP aggregation;
 - Type-1/Type-4 and MAC aliasing;
 - DF changes and split horizon;
-- local/remote egress from all three host positions;
+- local/remote egress from all three simulated host positions;
 - link and daemon failure/recovery;
 - configuration-order permutations.
 
@@ -1859,10 +1991,11 @@ complete OpenNebula contract.
 
 ### Architecture
 
-- [ ] Does the selected LACP termination model satisfy 20 Gb/s from all three
+- [ ] Does the selected LACP termination model satisfy 20 Gb/s from all four
   VM placements?
 - [ ] Is access-origin versus ES-origin provenance unambiguous and loop-safe?
-- [ ] Is the routed triangle acceptable, including degraded capacity?
+- [ ] Is the routed four-node ring acceptable, including transit contention
+  and degraded chain capacity after a link failure?
 - [ ] Is migration contention explicitly handled?
 - [ ] Are carrier VLAN and MTU contracts complete?
 

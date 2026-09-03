@@ -177,3 +177,29 @@ while ! bridge -n evpn-peer fdb show dev vxlan100 | grep -q "$mac_b.*extern"; do
 	sleep 1
 	attempts=$((attempts + 1))
 done
+
+# A vhost port remains configured when its QEMU client migrates away. Model
+# that lifecycle with carrier loss and require the local learned MAC and its
+# remote EVPN route to disappear without restarting FRR.
+mark_events
+ip -n host-b link set x-p1 down
+wait_event "iface down: p1"
+wait_event "fdb del: bridge=br100 $mac_b.* iface=p1 learn"
+
+attempts=0
+while bridge -n evpn-peer fdb show dev vxlan100 | grep -q "$mac_b.*extern"; do
+	[ "$attempts" -ge 10 ] && fail "EVPN peer retained withdrawn MAC $mac_b"
+	sleep 1
+	attempts=$((attempts + 1))
+done
+
+ip -n host-b link set x-p1 up
+wait_event "iface up: p1"
+ip netns exec host-b ping -i0.1 -c3 -W1 10.0.0.2
+
+attempts=0
+while ! bridge -n evpn-peer fdb show dev vxlan100 | grep -q "$mac_b.*extern"; do
+	[ "$attempts" -ge 5 ] && fail "EVPN peer did not relearn MAC $mac_b"
+	sleep 1
+	attempts=$((attempts + 1))
+done

@@ -208,9 +208,9 @@ NIC-owned RSS metadata or setting `RTE_MBUF_F_RX_RSS_HASH`.
 There are no direct RSS-field consumers or software RSS-flag producers outside
 the canonical flow-hash implementation and its tests. The full build and all
 Meson tests pass, as do the IPv4/IPv6 local ICMP, forwarding, load-balancing,
-DNAT and IP-in-IP smokes. The SRv6 smoke cannot run in the current container
-because its kernel rejects the Linux `seg6local` fixture before traffic reaches
-Grout; the affected Grout SRv6 module builds successfully.
+DNAT and IP-in-IP smokes. The SRv6 smoke cannot run under a kernel that
+rejects the Linux `seg6local` fixture before traffic reaches Grout; the
+affected Grout SRv6 module builds successfully.
 
 ## Workstream 2: bridge-domain representation
 

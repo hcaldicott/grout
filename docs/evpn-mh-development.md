@@ -18,14 +18,14 @@ carrier-facing ports remain bound to DPDK for the complete datapath.
 
 ## Evidence collected
 
-The initial AlmaLinux 9.8 arm64 Docker lab uses three independent Grout and FRR
+The initial three-node functional lab uses three independent Grout and FRR
 instances, Linux network namespaces for isolation, TAP-backed DPDK ports and a
 Linux bridge as the underlay. It is sufficient for control-plane and functional
 dataplane development; it does not represent physical NIC performance.
 
 | Capability | Result | Evidence |
 | --- | --- | --- |
-| AlmaLinux 9.8 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build natively on arm64. |
+| AlmaLinux 9.8 build | Pass | Grout, bundled DPDK and FRR 10.6.1 build for the AlmaLinux 9.8 target. |
 | Unit suite | Pass | All 12 Meson unit tests pass, including RSS/software flow-hash and bridge-port policy coverage. |
 | Three-node BGP EVPN | Pass | All peers establish and exchange EVPN routes. |
 | Three-node VXLAN bridge | Pass | Host traffic crosses node 1 to node 3 in both directions. |
@@ -61,13 +61,13 @@ those objects through the dataplane abstraction while retaining Linux
 
 Status: complete.
 
-Keep the AlmaLinux container, unit suite, three-node EVPN smoke test and
-split-chassis LACP probe green. Run arm64 for fast iteration and repeat release
-candidates under `linux/amd64` before SE350 testing.
+Keep the unit suite, three-node EVPN smoke test and split-chassis LACP probe
+green. Validate release candidates through the OBS AlmaLinux 9 staging build
+before SE350 testing.
 
 Acceptance criteria:
 
-- A clean container build succeeds without host dependencies.
+- A clean OBS staging build succeeds for the AlmaLinux 9.8 x86_64 target.
 - Existing unit tests pass.
 - The three-node non-MH EVPN test passes in both directions.
 - The carrier simulator selects both split-chassis LACP members.

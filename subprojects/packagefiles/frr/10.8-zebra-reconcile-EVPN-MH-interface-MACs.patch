@@ -1,0 +1,298 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Harrison Caldicott <harrison@itsfubar.com.au>
+Date: Thu, 13 Aug 2026 22:35:00 +1000
+Subject: [PATCH] zebra: share ES lifecycle and bypass MAC flushing
+
+A MAC learned before EVPN multihoming configuration is complete remains
+linked to the access interface rather than the Ethernet Segment. The
+existing ES lifecycle flush only walks the ES MAC list, so the stale MAC
+continues to be advertised without an ESI and remote PEs cannot build the
+all-active MAC nexthop group.
+
+Also flush local MACs linked directly to the interface when attaching or
+detaching an ES. The dataplane can then relearn them with forwarding
+information matching the current ES state.
+
+Use the same two-list traversal for ES attach, detach and LACP bypass
+changes. Preserve local-only filtering, ES-before-interface order,
+deletion-safe iteration and the existing per-MAC flush operation.
+
+Add topology coverage for attach, detach, ESI replacement and both bypass
+directions, checking withdrawal, relearning and unrelated MAC retention.
+
+Signed-off-by: Harrison Caldicott <harrison@itsfubar.com.au>
+---
+
+diff --git a/zebra/zebra_evpn_mh.c b/zebra/zebra_evpn_mh.c
+--- a/zebra/zebra_evpn_mh.c
++++ b/zebra/zebra_evpn_mh.c
+@@ -2403,24 +2403,43 @@
+ }
+ 
+ static void zebra_evpn_es_flush_local_macs(struct zebra_evpn_es *es,
+-					   struct interface *ifp, bool add)
++					   struct interface *ifp, const char *reason)
+ {
+ 	struct zebra_mac *mac;
+ 	struct listnode	*node;
+ 	struct listnode *nnode;
++	struct zebra_if *zif = ifp->info;
+ 
+ 	for (ALL_LIST_ELEMENTS(es->mac_list, node, nnode, mac)) {
+ 		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+ 			continue;
+ 
+-		/* If ES is being attached/detached from the access port we
+-		 * need to clear local activity and peer activity and start
+-		 * over */
++		/* ES membership or bypass changes invalidate local and peer
++		 * activity. Clear both and start over.
++		 */
+ 		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
+ 			zlog_debug("VNI %u mac %pEA update; local ES %s %s",
+ 				   mac->zevpn->vni,
+ 				   &mac->macaddr,
+-				   es->esi_str, add ? "add" : "del");
++				   es->esi_str, reason);
++		zebra_evpn_flush_local_mac(mac, ifp);
++	}
++
++	/* MACs learned before ES attachment or in LACP bypass are linked
++	 * to the access interface rather than the ES. Flush both lists so
++	 * the dataplane relearns them with the current ES forwarding info.
++	 */
++	if (!zif->mac_list)
++		return;
++
++	for (ALL_LIST_ELEMENTS(zif->mac_list, node, nnode, mac)) {
++		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
++			continue;
++
++		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
++			zlog_debug("VNI %u mac %pEA update; local ES %s %s on ifp %s",
++				   mac->zevpn->vni, &mac->macaddr, es->esi_str,
++				   reason, ifp->name);
+ 		zebra_evpn_flush_local_mac(mac, ifp);
+ 	}
+ }
+@@ -2606,7 +2625,7 @@
+ 	/* if there any local macs referring to the ES as dest we
+ 	 * need to clear the contents and start over
+ 	 */
+-	zebra_evpn_es_flush_local_macs(es, zif->ifp, true);
++	zebra_evpn_es_flush_local_macs(es, zif->ifp, "add");
+ 
+ 	/* inherit EVPN protodown flags on the access port */
+ 	zebra_evpn_mh_update_protodown_es(es, true /*resync_dplane*/);
+@@ -2636,7 +2655,7 @@
+ 	/* if there any local macs referring to the ES as dest we
+ 	 * need to clear the contents and start over
+ 	 */
+-	zebra_evpn_es_flush_local_macs(es, zif->ifp, false);
++	zebra_evpn_es_flush_local_macs(es, zif->ifp, "del");
+ 
+ 	es->flags &= ~(ZEBRA_EVPNES_LOCAL | ZEBRA_EVPNES_READY_FOR_BGP);
+ 
+@@ -3039,51 +3058,6 @@
+ 		zebra_evpn_es_send_add_to_client(es);
+ }
+ 
+-/* If bypass mode on an es changed we set all local macs to
+- * inactive and drop the sync info
+- */
+-static void zebra_evpn_es_bypass_update_macs(struct zebra_evpn_es *es,
+-					     struct interface *ifp, bool bypass)
+-{
+-	struct zebra_mac *mac;
+-	struct listnode *node;
+-	struct listnode *nnode;
+-	struct zebra_if *zif;
+-
+-	/* Flush all MACs linked to the ES */
+-	for (ALL_LIST_ELEMENTS(es->mac_list, node, nnode, mac)) {
+-		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+-			continue;
+-
+-		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
+-			zlog_debug("VNI %u mac %pEA %s update es %s",
+-				   mac->zevpn->vni,
+-				   &mac->macaddr,
+-				   bypass ? "bypass" : "non-bypass",
+-				   es->esi_str);
+-		zebra_evpn_flush_local_mac(mac, ifp);
+-	}
+-
+-	/* While in bypass-mode locally learnt MACs are linked
+-	 * to the access port instead of the ES
+-	 */
+-	zif = ifp->info;
+-	if (!zif->mac_list)
+-		return;
+-
+-	for (ALL_LIST_ELEMENTS(zif->mac_list, node, nnode, mac)) {
+-		if (!CHECK_FLAG(mac->flags, ZEBRA_MAC_LOCAL))
+-			continue;
+-
+-		if (IS_ZEBRA_DEBUG_EVPN_MH_MAC)
+-			zlog_debug("VNI %u mac %pEA %s update ifp %s",
+-				   mac->zevpn->vni,
+-				   &mac->macaddr,
+-				   bypass ? "bypass" : "non-bypass", ifp->name);
+-		zebra_evpn_flush_local_mac(mac, ifp);
+-	}
+-}
+-
+ void zebra_evpn_es_bypass_update(struct zebra_evpn_es *es,
+ 				 struct interface *ifp, bool bypass)
+ {
+@@ -3107,7 +3081,7 @@
+ 	if (es->flags & ZEBRA_EVPNES_READY_FOR_BGP)
+ 		zebra_evpn_es_send_add_to_client(es);
+ 
+-	zebra_evpn_es_bypass_update_macs(es, ifp, bypass);
++	zebra_evpn_es_flush_local_macs(es, ifp, bypass ? "bypass" : "non-bypass");
+ 
+ 	/* re-run DF election */
+ 	dplane_updated = zebra_evpn_es_run_df_election(es, __func__);
+diff --git a/tests/topotests/bgp_evpn_mh/test_evpn_mh.py b/tests/topotests/bgp_evpn_mh/test_evpn_mh.py
+--- a/tests/topotests/bgp_evpn_mh/test_evpn_mh.py
++++ b/tests/topotests/bgp_evpn_mh/test_evpn_mh.py
+@@ -1273,6 +1273,136 @@
+         config_svi(origin, svi_ips.get(origin_name))
+ 
+ 
++@pytest.mark.parametrize(
++    "transition",
++    ["attach", "detach", "replace", "bypass-on", "bypass-off"],
++)
++def test_evpn_mac_es_transition(transition):
++    """Flush only affected MACs, withdraw them, then relearn with the new ESI.
++
++    Dynamic FDB injection makes learning deterministic without periodic traffic
++    hiding a missed withdrawal. Unique ESIs prevent peer sync from reintroducing
++    the test MACs while we check the empty state.
++    """
++    tgen = get_topogen()
++    if tgen.routers_have_failure():
++        pytest.skip(tgen.errors)
++
++    dut = tgen.gears["torm11"]
++    remote = tgen.gears["torm21"]
++    port = "hostbond1"
++    macs = ["02:00:00:fe:01:{:02x}".format(i) for i in range(1, 4)]
++    other_mac = "02:00:00:fe:02:01"
++    remote_mac = "02:00:00:fe:03:01"
++    # Type-3 ESI: system MAC followed by the three-byte local ES ID.
++    esi1 = "03:44:38:39:ff:ff:01:00:00:65"
++    esi2 = "03:44:38:39:ff:ff:01:00:00:66"
++
++    def configure(*commands):
++        dut.vtysh_cmd(
++            "configure terminal\ninterface {}\n{}".format(port, "\n".join(commands))
++        )
++
++    def learn(router, interface, mac):
++        router.cmd_raises(
++            "bridge fdb replace {} dev {} vlan 1000 master dynamic".format(
++                mac, interface
++            )
++        )
++
++    def mac_state(router, mac, kind, esi="", interface=""):
++        state = router.vtysh_cmd(
++            "show evpn mac vni 1000 mac {} json".format(mac), isjson=True
++        )
++        if kind is None:
++            return (
++                None if mac not in state else "{} still present: {}".format(mac, state)
++            )
++        info = state.get(mac, {})
++        if (
++            info.get("type") == kind
++            and info.get("esi", "") == esi
++            and (kind != "local" or info.get("intf") == interface)
++        ):
++            return None
++        return "{}: unexpected MAC state {}".format(router.name, state)
++
++    def wait(check):
++        _, result = topotest.run_and_expect(check, None, count=30, wait=1)
++        assert result is None, result
++
++    def check_targets(kind, esi=""):
++        for mac in macs:
++            wait(partial(mac_state, dut, mac, kind, esi, port))
++            wait(partial(mac_state, remote, mac, "remote" if kind else None, esi))
++
++    def check_unrelated():
++        wait(
++            partial(
++                mac_state, dut, other_mac, "local", host_es_map["hostd12"], "hostbond2"
++            )
++        )
++        wait(partial(mac_state, dut, remote_mac, "remote", host_es_map["hostd22"]))
++
++    def fdb_absent():
++        entries = json.loads(dut.cmd_raises("bridge -j fdb show dev {}".format(port)))
++        remaining = [entry for entry in entries if entry.get("mac") in macs]
++        return "FDB entries not flushed: {}".format(remaining) if remaining else None
++
++    initial_esi = "" if transition in ("attach", "bypass-off") else esi1
++    final_esi = {
++        "attach": esi1,
++        "detach": "",
++        "replace": esi2,
++        "bypass-on": "",
++        "bypass-off": esi1,
++    }[transition]
++    command = {
++        "attach": "evpn mh es-id 101",
++        "detach": "no evpn mh es-id",
++        "replace": "evpn mh es-id 102",
++        "bypass-on": "evpn mh bypass",
++        "bypass-off": "no evpn mh bypass",
++    }[transition]
++
++    try:
++        configure("no evpn mh bypass", "no evpn mh es-id")
++        if transition != "attach":
++            configure("evpn mh es-id 101")
++        if transition == "bypass-off":
++            configure("evpn mh bypass")
++
++        learn(dut, "hostbond2", other_mac)
++        learn(remote, "hostbond2", remote_mac)
++        for mac in macs:
++            learn(dut, port, mac)
++        check_targets("local", initial_esi)
++        check_unrelated()
++
++        configure(command)
++        wait(fdb_absent)
++        check_targets(None)
++        check_unrelated()
++
++        for mac in macs:
++            learn(dut, port, mac)
++        check_targets("local", final_esi)
++        check_unrelated()
++
++        # An identical configuration must leave the freshly learned MACs alone.
++        configure(command)
++        check_targets("local", final_esi)
++        check_unrelated()
++    finally:
++        for mac in macs:
++            dut.run("bridge fdb del {} dev {} vlan 1000 master".format(mac, port))
++        dut.run("bridge fdb del {} dev hostbond2 vlan 1000 master".format(other_mac))
++        remote.run(
++            "bridge fdb del {} dev hostbond2 vlan 1000 master".format(remote_mac)
++        )
++        configure("no evpn mh bypass", "evpn mh es-id 1")
++
++
+ if __name__ == "__main__":
+     args = ["-s"] + sys.argv[1:]
+     sys.exit(pytest.main(args))
+-- 
+2.51.0

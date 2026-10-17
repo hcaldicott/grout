@@ -308,40 +308,20 @@ repairs the two-member graph without static entries.
 
 ### FRR-001: upstream the non-kernel EVPN-MH dataplane path
 
-**Status:** Prototype
+**Status:** Done upstream (FRR 10.8)
 
 **Priority:** P0
 
-The FRR 10.6.1 patches fix a genuine abstraction problem: EVPN-MH L2
-nexthops/groups bypassed the generic dataplane queue and called Linux netlink
-helpers directly. The fork now routes typed L2 objects through the dataplane
-provider while preserving Linux `NHA_FDB` behavior.
-
-The implementation also has explicit typed-L2 completion handling. The
-successful path and rejected install/delete results are covered by the
-three-node lab, but the changes are not upstream and remain a high-maintenance
-fork surface.
+EVPN-MH FDB nexthops and per-ES nexthop groups used to bypass the generic
+dataplane queue and call Linux netlink helpers directly. FRRouting/frr#23056
+added dedicated `DPLANE_OP_NH_FDB_INSTALL`/`_DELETE` operations, merged to
+master on 2026-08-26 and lands in FRR 10.8. The fork's own carried patch
+was dropped in favour of it: the grout plugin handles these operations only
+when built against FRR >= 10.8, so EVPN-MH is not supported with older FRR.
 
 #### Remaining work
 
-- Add focused FRR provider/topotests for IPv4 and IPv6 VTEPs, group
-  add/replace/delete, Linux netlink encoding and provider failure results.
-- Verify the remaining typed-L2 completion cases, especially transport
-  timeouts and superseded operations.
-- Separate generally useful FRR fixes from Grout-specific provider work.
-- Submit the generic dataplane fix upstream and respond to review.
-- Document the supported FRR version and establish a rebase test for each FRR
-  upgrade until the changes are accepted upstream.
-- Decide who owns the fork if upstream declines the change.
-
-#### Acceptance tests
-
-- Existing upstream Linux EVPN-MH topotests remain green.
-- A non-kernel test provider observes typed L2 NH/NHG operations.
-- Failed provider results do not crash Zebra, falsely mark objects installed,
-  or leave silent stale state.
-- The maintained patch series applies automatically to the supported FRR
-  release in CI.
+- Upstream the MAC reconciliation patch, which is not part of FRR 10.8.
 
 ## Workstream 5: reconciliation and restart
 

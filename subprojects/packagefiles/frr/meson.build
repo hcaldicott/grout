@@ -100,6 +100,7 @@ frr_dep = declare_dependency(
   sources: [build],
   version: meson.project_version(),
   variables: {
+    'source_dir': srcdir,
     'moduledir': moduledir,
     'prefix': prefix,
     'install_on_build': 'true',

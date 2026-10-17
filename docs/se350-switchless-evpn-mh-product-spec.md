@@ -1229,37 +1229,15 @@ The provider rejects any FRR MAC operation whose VLAN is not
 instead of being silently collapsed into Grout's internal untagged-domain key
 0.
 
-### 13.3 FRR Layer-2 nexthop dataplane patch
+### 13.3 FRR Layer-2 nexthop dataplane path
 
-FRR 10.6.1's EVPN-MH code normally calls Linux netlink-specific functions
-directly for FDB nexthops and MAC ECMP groups. A non-kernel provider may not
-initialize the required kernel command socket, which caused Zebra failure.
-
-`subprojects/packagefiles/frr/10.6-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch`
-changes those operations to use the ordinary Zebra dataplane queue while
-retaining:
-
-- FRR's typed Layer-2 nexthop IDs;
-- VTEP address and group-member data for non-kernel providers;
-- Linux provider behavior, including `NHA_FDB` encoding.
-
-Typed L2 completion contexts are handled explicitly. Successful completions do
-not enter the ordinary NHG hash because these IDs intentionally have no
-`nhg_hash_entry`; failed install and delete completions produce an actionable
-Zebra error rather than disappearing through the expected hash miss.
-
-The architectural principle is important: FRR should expose an implementation-
-neutral dataplane object. It should not call Grout-specific code from
-`zebra_evpn_mh.c`.
-
-Before an upstream FRR PR, add provider/topotests for:
-
-- IPv4 and IPv6 VTEPs;
-- group install, update and delete;
-- delete-before-member and member-before-group ordering;
-- provider failure/status propagation;
-- Linux netlink `NHA_FDB` encoding;
-- regression of existing Linux EVPN-MH topologies.
+Before FRR 10.8, zebra's EVPN-MH code called Linux netlink functions directly
+for FDB nexthops and MAC ECMP groups, so a non-kernel dataplane provider never
+saw them. FRRouting/frr#23056 (FRR 10.8) routes them through dedicated
+`DPLANE_OP_NH_FDB_INSTALL`/`_DELETE` dataplane operations carrying the VTEP
+address or group members. The grout plugin translates these into Grout L2
+nexthops and nexthop groups, and handles them only when built against
+FRR >= 10.8; EVPN-MH therefore requires FRR 10.8 or later.
 
 ### 13.4 Grout L2 nexthops and MAC ECMP
 
@@ -1481,7 +1459,6 @@ live migration.
 | FRR interface/VLAN representation | `frr/if_grout.c` |
 | FRR route/FDB/NHG translation | `frr/rt_grout.c` |
 | FRR provider operations | `frr/zebra_dplane_grout.c` |
-| FRR L2 dplane patch | `subprojects/packagefiles/frr/10.6-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch` |
 | FRR MAC reconciliation patch | `subprojects/packagefiles/frr/10.7-zebra-reconcile-EVPN-MH-interface-MACs.patch` |
 | L2 public API | `modules/l2/api/gr_l2.h` |
 | Bridge-port control/API | `modules/l2/control/bridge_port.c`, `modules/l2/cli/bridge_port.c` |

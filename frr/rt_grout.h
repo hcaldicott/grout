@@ -13,6 +13,7 @@ void grout_route4_change(bool new, struct gr_ip4_route *gr_r4, bool startup);
 void grout_route6_change(bool new, struct gr_ip6_route *gr_r6, bool startup);
 enum zebra_dplane_result grout_add_del_route(struct zebra_dplane_ctx *ctx);
 enum zebra_dplane_result grout_add_del_nexthop(struct zebra_dplane_ctx *ctx);
+enum zebra_dplane_result grout_add_del_fdb_nexthop(struct zebra_dplane_ctx *ctx);
 void grout_nexthop_change(bool new, struct gr_nexthop *gr_nh, bool startup);
 void grout_nexthop_group_add(struct gr_nexthop *gr_nh, bool startup);
 

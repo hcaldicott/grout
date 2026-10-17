@@ -634,31 +634,33 @@ enum zebra_dplane_result grout_add_del_route(struct zebra_dplane_ctx *ctx) {
 	return ZEBRA_DPLANE_REQUEST_SUCCESS;
 }
 
-static enum zebra_dplane_result grout_add_nexthop_group(struct zebra_dplane_ctx *ctx) {
+static enum zebra_dplane_result grout_add_nexthop_group(
+	uint32_t nh_id,
+	gr_nh_origin_t origin,
+	uint16_t n_members,
+	const struct nh_grp *nhs
+) {
 	enum zebra_dplane_result ret = ZEBRA_DPLANE_REQUEST_SUCCESS;
-	uint32_t nh_id = dplane_ctx_get_nhe_id(ctx);
 	struct gr_nexthop_info_group *group;
 	struct gr_nh_add_req *req = NULL;
 	size_t len;
 
 	gr_log_debug("nh_id %u", nh_id);
 
-	len = sizeof(*req) + sizeof(*group)
-		+ dplane_ctx_get_nhe_nh_grp_count(ctx) * sizeof(group->members[0]);
+	len = sizeof(*req) + sizeof(*group) + n_members * sizeof(group->members[0]);
 	if ((req = calloc(1, len)) == NULL) {
 		gr_log_debug("calloc: %s", strerror(errno));
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
 	}
 
 	group = (struct gr_nexthop_info_group *)req->nh.info;
-	group->n_members = dplane_ctx_get_nhe_nh_grp_count(ctx);
+	group->n_members = n_members;
 
 	req->exist_ok = true;
 	req->nh.nh_id = nh_id;
 	req->nh.type = GR_NH_T_GROUP;
-	req->nh.origin = zebra2origin(dplane_ctx_get_nhe_type(ctx));
+	req->nh.origin = origin;
 
-	const struct nh_grp *nhs = dplane_ctx_get_nhe_nh_grp(ctx);
 	for (size_t i = 0; i < group->n_members; i++) {
 		group->members[i].nh_id = nhs[i].id;
 		group->members[i].weight = nhs[i].weight;
@@ -695,8 +697,8 @@ grout_del_nexthop(uint32_t nh_id, gr_nh_origin_t origin, uint32_t id_type) {
 	return ZEBRA_DPLANE_REQUEST_SUCCESS;
 }
 
-static enum zebra_dplane_result grout_add_l2_nexthop(struct zebra_dplane_ctx *ctx) {
-	const struct nexthop *nh = dplane_ctx_get_nhe_ng(ctx)->nexthop;
+#if CURRENT_FRR_VERSION >= MAKE_FRRVERSION(10, 8, 0)
+static enum zebra_dplane_result grout_add_l2_nexthop(uint32_t nh_id, const struct ipaddr *vtep) {
 	enum zebra_dplane_result ret = ZEBRA_DPLANE_REQUEST_FAILURE;
 	struct gr_nexthop_info_l2 *l2;
 	struct gr_nh_add_req *req;
@@ -710,26 +712,24 @@ static enum zebra_dplane_result grout_add_l2_nexthop(struct zebra_dplane_ctx *ct
 	}
 
 	req->exist_ok = true;
-	req->nh.nh_id = dplane_ctx_get_nhe_id(ctx);
-	req->nh.origin = zebra2origin(dplane_ctx_get_nhe_type(ctx));
+	req->nh.nh_id = nh_id;
+	req->nh.origin = GR_NH_ORIGIN_BGP;
 	req->nh.type = GR_NH_T_L2;
-	req->nh.vrf_id = vrf_frr_to_grout(dplane_ctx_get_nhe_vrf_id(ctx));
+	req->nh.vrf_id = vrf_frr_to_grout(VRF_DEFAULT);
 	req->nh.iface_id = GR_IFACE_ID_UNDEF;
 	l2 = (struct gr_nexthop_info_l2 *)req->nh.info;
 
-	switch (nh->type) {
-	case NEXTHOP_TYPE_IPV4:
-	case NEXTHOP_TYPE_IPV4_IFINDEX:
+	switch (vtep->ipa_type) {
+	case IPADDR_V4:
 		l2->vtep.af = GR_AF_IP4;
-		memcpy(&l2->vtep.ipv4, &nh->gate.ipv4, sizeof(l2->vtep.ipv4));
+		memcpy(&l2->vtep.ipv4, &vtep->ipaddr_v4, sizeof(l2->vtep.ipv4));
 		break;
-	case NEXTHOP_TYPE_IPV6:
-	case NEXTHOP_TYPE_IPV6_IFINDEX:
+	case IPADDR_V6:
 		l2->vtep.af = GR_AF_IP6;
-		memcpy(&l2->vtep.ipv6, &nh->gate.ipv6, sizeof(l2->vtep.ipv6));
+		memcpy(&l2->vtep.ipv6, &vtep->ipaddr_v6, sizeof(l2->vtep.ipv6));
 		break;
 	default:
-		gr_log_err("unsupported L2 nexthop type %u", nh->type);
+		gr_log_err("unsupported L2 nexthop vtep type %u", vtep->ipa_type);
 		goto out;
 	}
 
@@ -739,6 +739,36 @@ out:
 	free(req);
 	return ret;
 }
+
+// EVPN-MH FDB nexthops (per-VTEP) and nexthop groups (per-ES) are programmed
+// through dedicated dplane ops since FRR 10.8. They carry no route type, so
+// tag them with the BGP origin that EVPN routes use.
+enum zebra_dplane_result grout_add_del_fdb_nexthop(struct zebra_dplane_ctx *ctx) {
+	uint16_t n_members = dplane_ctx_get_fdb_nh_grp_count(ctx);
+	uint32_t nh_id = dplane_ctx_get_fdb_nh_id(ctx);
+	uint32_t id_type = nh_id >> NHG_ID_TYPE_POS;
+
+	gr_log_debug(
+		"%s nh_id %u n_members %u",
+		dplane_ctx_get_op(ctx) == DPLANE_OP_NH_FDB_DELETE ? "del" : "add",
+		nh_id,
+		n_members
+	);
+
+	if (!nh_id) {
+		gr_log_err("no nh_id, skip");
+		return ZEBRA_DPLANE_REQUEST_FAILURE;
+	}
+	if (dplane_ctx_get_op(ctx) == DPLANE_OP_NH_FDB_DELETE)
+		return grout_del_nexthop(nh_id, GR_NH_ORIGIN_BGP, id_type);
+	if (n_members)
+		return grout_add_nexthop_group(
+			nh_id, GR_NH_ORIGIN_BGP, n_members, dplane_ctx_get_fdb_nh_grp(ctx)
+		);
+
+	return grout_add_l2_nexthop(nh_id, dplane_ctx_get_fdb_nh_vtep_ip(ctx));
+}
+#endif
 
 static enum zebra_dplane_result
 grout_add_nexthop(uint32_t nh_id, gr_nh_origin_t origin, const struct nexthop *nh) {
@@ -979,17 +1009,18 @@ enum zebra_dplane_result grout_add_del_nexthop(struct zebra_dplane_ctx *ctx) {
 	}
 	if (dplane_ctx_get_op(ctx) == DPLANE_OP_NH_DELETE)
 		return grout_del_nexthop(nh_id, origin, id_type);
-	if (id_type == NHG_TYPE_L2_NH)
-		return grout_add_l2_nexthop(ctx);
-	if (id_type == NHG_TYPE_L2)
-		return grout_add_nexthop_group(ctx);
 	if (id_type != NHG_TYPE_L3) {
 		gr_log_err("unsupported nexthop id type %u", id_type);
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
 	}
 
 	if (dplane_ctx_get_nhe_nh_grp_count(ctx))
-		return grout_add_nexthop_group(ctx);
+		return grout_add_nexthop_group(
+			nh_id,
+			origin,
+			dplane_ctx_get_nhe_nh_grp_count(ctx),
+			dplane_ctx_get_nhe_nh_grp(ctx)
+		);
 
 	return grout_add_nexthop(nh_id, origin, dplane_ctx_get_nhe_ng(ctx)->nexthop);
 }

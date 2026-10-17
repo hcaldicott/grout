@@ -105,6 +105,11 @@ The plugin is built as a shared library (_dplane_grout.so_) and installed
 into FRR's module directory. It requires FRR >= 10.5. The grout build system
 handles this automatically via meson.
 
+EVPN multihoming (Ethernet Segment FDB nexthops and nexthop groups) is only
+supported when the plugin is built against FRR >= 10.8, which programs them
+through the dataplane. Older FRR releases send them directly to the kernel and
+grout never sees them.
+
 ## Network namespace
 
 FRR daemons must run in the same network namespace as grout so they can access

@@ -1147,6 +1147,12 @@ static enum zebra_dplane_result zd_grout_process_update(struct zebra_dplane_ctx 
 		return ZEBRA_DPLANE_REQUEST_FAILURE;
 #endif
 
+#if CURRENT_FRR_VERSION >= MAKE_FRRVERSION(10, 8, 0)
+	case DPLANE_OP_NH_FDB_INSTALL:
+	case DPLANE_OP_NH_FDB_DELETE:
+		return grout_add_del_fdb_nexthop(ctx);
+#endif
+
 	case DPLANE_OP_NONE:
 		return ZEBRA_DPLANE_REQUEST_SUCCESS;
 

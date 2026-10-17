@@ -1,0 +1,14 @@
+[wrap-file]
+# Pre-release snapshot of stable/10.8 (10.8.0-dev); replace with the
+# frr-10.8.0 tag once FRR publishes it.
+source_url = https://github.com/FRRouting/frr/archive/547be302d571e913da10c719e917d648af91fdd7.tar.gz
+source_filename = frr-547be302d571e913da10c719e917d648af91fdd7.tar.gz
+source_hash = 5ce46f93251390500e46c0ef3b9912b06089f9d231ec0b49d2f08d9e155814c6
+directory = frr-547be302d571e913da10c719e917d648af91fdd7
+patch_directory = frr
+diff_files =
+	frr/10.7-zebra-route-IPv4-link-local-neighbor-updates-through.patch,
+	frr/10.8-zebra-reconcile-EVPN-MH-interface-MACs.patch
+
+[provide]
+dependency_names = frr-10.8

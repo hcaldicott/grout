@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!-- Copyright (c) 2026 Harrison Caldicott -->
 <project name="Grout">
   <title>Grout EVPN-MH packages</title>
   <description>Signed production Grout EVPN-MH and patched FRR packages for AlmaLinux 9 x86_64.</description>

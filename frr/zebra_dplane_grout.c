@@ -120,8 +120,8 @@ static uint32_t grout_sync_marker_table_id(void) {
 //   GR_API_MESSAGE_NAME object-id-or-zero errno delay-ms
 static bool grout_fault_inject(uint32_t req_type, size_t tx_len, const void *tx_data) {
 	const char *path = getenv("GROUT_DPLANE_FAULT_FILE");
-	char claim[PATH_MAX], message[64];
 	uint32_t object_id = 0, expected_id;
+	char claim[PATH_MAX], message[64];
 	int error, delay_ms;
 	FILE *file;
 
@@ -416,13 +416,13 @@ static void grout_sync_cleanup_marker(void) {
 //   nexthop    blackhole      inert (entry never installed)
 //   table      live default-VRF table (normally 0 after grout_ns_reset)
 static void grout_sync_inject_marker(void) {
+	uint32_t table_id = grout_sync_marker_table_id();
 	// Local non-const copy: rib_add_multipath takes a non-const prefix
 	// pointer and may apply_mask in-place.
 	struct prefix p = grout_sync_marker_prefix;
 	struct nexthop_group *ng;
 	struct route_entry *re;
 	struct nexthop *nh;
-	uint32_t table_id = grout_sync_marker_table_id();
 
 	nh = nexthop_new();
 	nh->type = NEXTHOP_TYPE_BLACKHOLE;

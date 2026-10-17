@@ -60,8 +60,8 @@ static void group_reta_distribute(
 }
 
 static void remove_group_member_cb(struct nexthop *nh, void *deleted) {
-	struct nexthop_info_group *group;
 	struct nexthop_group_state *state;
+	struct nexthop_info_group *group;
 	uint16_t dst = 0;
 
 	if (nh->type != GR_NH_T_GROUP)
@@ -126,10 +126,10 @@ static int order_by_weight_desc(const void *a, const void *b) {
 
 static int group_import_info(struct nexthop *nh, const void *info) {
 	struct nexthop_info_group *pvt = nexthop_info_group(nh);
+	const struct nexthop_group_state *current = NULL;
 	const struct gr_nexthop_info_group *group = info;
 	struct nexthop_group_state *next = NULL;
 	struct nexthop_group_state *old = NULL;
-	const struct nexthop_group_state *current = NULL;
 	uint32_t min_weight, max_weight;
 	bool refs_acquired = false;
 

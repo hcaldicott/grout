@@ -693,11 +693,12 @@ grout_del_nexthop(uint32_t nh_id, gr_nh_origin_t origin, uint32_t id_type) {
 
 static enum zebra_dplane_result grout_add_l2_nexthop(struct zebra_dplane_ctx *ctx) {
 	const struct nexthop *nh = dplane_ctx_get_nhe_ng(ctx)->nexthop;
+	enum zebra_dplane_result ret = ZEBRA_DPLANE_REQUEST_FAILURE;
 	struct gr_nexthop_info_l2 *l2;
 	struct gr_nh_add_req *req;
-	const size_t len = sizeof(*req) + sizeof(*l2);
-	enum zebra_dplane_result ret = ZEBRA_DPLANE_REQUEST_FAILURE;
+	size_t len;
 
+	len = sizeof(*req) + sizeof(*l2);
 	req = calloc(1, len);
 	if (req == NULL) {
 		gr_log_err("calloc: %s", strerror(errno));

@@ -445,10 +445,10 @@ static void bond_to_api(void *info, const struct iface *iface) {
 
 static struct api_out bond_member_set(const void *request, struct api_ctx *) {
 	const struct gr_bond_member_set_req *req = request;
-	struct iface_info_bond *bond;
 	struct bond_member *member = NULL;
-	struct iface *bond_iface;
+	struct iface_info_bond *bond;
 	struct iface *member_iface;
+	struct iface *bond_iface;
 
 	member_iface = iface_from_id(req->member_iface_id);
 	if (member_iface == NULL)

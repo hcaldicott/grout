@@ -10,8 +10,8 @@
 #include <ecoli.h>
 
 static cmd_status_t bridge_port_show(struct gr_api_client *c, const struct ec_pnode *p) {
-	struct gr_bridge_port_get_req req;
 	const struct gr_bridge_port_policy *policy;
+	struct gr_bridge_port_get_req req;
 	void *resp = NULL;
 
 	if (arg_iface(c, p, "IFACE", GR_IFACE_TYPE_UNDEF, &req.iface_id) < 0)

@@ -5,7 +5,7 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-version=${GROUT_RPM_VERSION:-0.16.3}
+version=${GROUT_RPM_VERSION:-0.19.3}
 dist="$repo/dist/obs"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM

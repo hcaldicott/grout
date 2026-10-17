@@ -9,8 +9,8 @@
 
 # OBS builds do not inject the GNUmakefile's version/release macros. Keep
 # explicit snapshot defaults while allowing local `make rpm` to override them.
-%{!?version:%global version 0.16.3}
-%{!?release:%global release 0.1.evpnmh.g38e00bd9%{?dist}}
+%{!?version:%global version 0.19.3}
+%{!?release:%global release 0.1.evpnmh%{?dist}}
 
 %define dpdk_cpu generic
 %ifarch x86_64
@@ -162,7 +162,7 @@ smoke_socket="$PWD/grout-smoke.sock"
 smoke_log="$PWD/grout-smoke.log"
 set +e
 timeout --signal=TERM 3s env GROUT_MEMPOOL_CACHE_SIZE=64 "$grout_bin" -t -s "$smoke_socket" \
-	-M tcp:127.0.0.1:0 -- -m 128 >"$smoke_log" 2>&1
+	-M tcp:127.0.0.1:0 -- -m 512 >"$smoke_log" 2>&1
 smoke_rc=$?
 set -e
 cat "$smoke_log"
@@ -188,8 +188,8 @@ rm -rf %{buildroot}%{_sysconfdir} %{buildroot}%{_unitdir}
 %doc README.md
 %license licenses/BSD-3-clause.txt
 %if %{with systemd}
-%config %{_sysconfdir}/default/grout
-%config %{_sysconfdir}/grout.init
+%config(noreplace) %{_sysconfdir}/default/grout
+%config(noreplace) %{_sysconfdir}/grout.init
 %attr(644, root, root) %{_unitdir}/grout.service
 %endif
 %attr(644, root, root) %{_datadir}/bash-completion/completions/grout

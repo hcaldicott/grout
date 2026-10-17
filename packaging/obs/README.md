@@ -12,7 +12,7 @@ Upload these files to the unpublished `Grout:Staging:AlmaLinux9.8` project:
 - package `frr`: `dist/obs/frr.spec`, `dist/obs/frr-10.7.1.tar.gz`, and the
   four renamed patches in `dist/obs`;
 - package `grout`: `dist/obs/grout.spec` and
-  `dist/obs/grout-0.16.3.tar.gz`.
+  `dist/obs/grout-0.19.3.tar.gz`.
 
 OBS builds `frr` first because `grout` requires the resulting `frr-headers`.
 The Grout source archive embeds only the checksum-verified DPDK and libecoli

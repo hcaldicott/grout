@@ -10,7 +10,7 @@
 %global _lto_cflags -flto=1 -ffat-lto-objects
 %global selinuxtype targeted
 %define _legacy_common_support 1
-%{!?version:%global version 10.6.1}
+%{!?version:%global version 10.7.1}
 
 Name: frr
 Version: %{version}

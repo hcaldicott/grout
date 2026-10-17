@@ -1317,7 +1317,7 @@ the access interface, not the ES. FRR's original ES lifecycle flush walks only
 the ES MAC list, so the stale MAC can continue to be advertised without an ESI.
 Remote PEs then cannot form the correct all-active group.
 
-`subprojects/packagefiles/frr/10.6-zebra-reconcile-EVPN-MH-interface-MACs.patch`
+`subprojects/packagefiles/frr/10.7-zebra-reconcile-EVPN-MH-interface-MACs.patch`
 also flushes local MACs linked directly to the interface on ES attach/detach.
 The dataplane relearns them with current ES forwarding information.
 
@@ -1482,7 +1482,7 @@ live migration.
 | FRR route/FDB/NHG translation | `frr/rt_grout.c` |
 | FRR provider operations | `frr/zebra_dplane_grout.c` |
 | FRR L2 dplane patch | `subprojects/packagefiles/frr/10.6-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch` |
-| FRR MAC reconciliation patch | `subprojects/packagefiles/frr/10.6-zebra-reconcile-EVPN-MH-interface-MACs.patch` |
+| FRR MAC reconciliation patch | `subprojects/packagefiles/frr/10.7-zebra-reconcile-EVPN-MH-interface-MACs.patch` |
 | L2 public API | `modules/l2/api/gr_l2.h` |
 | Bridge-port control/API | `modules/l2/control/bridge_port.c`, `modules/l2/cli/bridge_port.c` |
 | Bridge forwarding policy | `modules/l2/datapath/bridge_input.c`, `modules/l2/datapath/bridge_flood.c` |

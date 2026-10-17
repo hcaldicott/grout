@@ -24,13 +24,13 @@ verify_source() {
 	fi
 }
 
-dpdk="$repo/subprojects/packagecache/dpdk-25.11.2.tar.xz"
-ecoli="$repo/subprojects/packagecache/libecoli-0.11.3.tar.gz"
-frr="$repo/subprojects/packagecache/frr-10.6.1.tar.gz"
+dpdk="$repo/subprojects/packagecache/dpdk-25.11.4.tar.xz"
+ecoli="$repo/subprojects/packagecache/libecoli-0.11.6.tar.gz"
+frr="$repo/subprojects/packagecache/frr-10.7.1.tar.gz"
 
-verify_source 418bfe3212640ee95a1cb10af6ed360cad2387686fe2721f8a3a9cd02d5ef4f2 "$dpdk"
-verify_source 25ed9638452fa050749746c863574dfd47df95bde98347d210c9deedea188151 "$ecoli"
-verify_source 35f2cb4328617261db687e1d4e400c7c491b41b3aa4a109d7da9ebff0cf7e402 "$frr"
+verify_source 50272f214b2e7fd23dc9b6b4d5408b54798021b19611339298784faa5a189b43 "$dpdk"
+verify_source bd4499f4d9944f357e44ba07f991639475051c044ee87b11cfa6959b8764ac43 "$ecoli"
+verify_source 6aaf9d89deb94eeda6acceaa6fe48d8cd365d0908231e58f628538ff49696fc4 "$frr"
 
 mkdir -p "$dist" "$stage/grout-$version/subprojects/packagecache"
 git -C "$repo" archive --format=tar HEAD | tar -xf - -C "$stage/grout-$version"
@@ -39,14 +39,16 @@ cp "$dpdk" "$ecoli" "$stage/grout-$version/subprojects/packagecache/"
 # com.apple.provenance metadata out of the POSIX source archive. GNU tar in the
 # AlmaLinux builder otherwise warns about every such extended header.
 tar --no-xattrs -C "$stage" -czf "$dist/grout-$version.tar.gz" "grout-$version"
-cp "$frr" "$dist/frr-10.6.1.tar.gz"
+cp "$frr" "$dist/frr-10.7.1.tar.gz"
 cp "$repo/rpm/grout.spec" "$dist/grout.spec"
 cp "$repo/rpm/frr.spec" "$dist/frr.spec"
-cp "$repo/subprojects/packagefiles/frr/10.5-zebra-route-IPv4-link-local-neighbor-updates-through.patch" \
+cp "$repo/subprojects/packagefiles/frr/10.7-zebra-route-IPv4-link-local-neighbor-updates-through.patch" \
 	"$dist/zebra-route-IPv4-link-local-neighbor-updates-through.patch"
-cp "$repo/subprojects/packagefiles/frr/10.6-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch" \
+cp "$repo/subprojects/packagefiles/frr/10.7-bgpd-fix-crash-when-debug-bgp-updates-out-enabled.patch" \
+	"$dist/bgpd-fix-crash-when-debug-bgp-updates-out-enabled.patch"
+cp "$repo/subprojects/packagefiles/frr/10.7-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch" \
 	"$dist/zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch"
-cp "$repo/subprojects/packagefiles/frr/10.6-zebra-reconcile-EVPN-MH-interface-MACs.patch" \
+cp "$repo/subprojects/packagefiles/frr/10.7-zebra-reconcile-EVPN-MH-interface-MACs.patch" \
 	"$dist/zebra-reconcile-EVPN-MH-interface-MACs.patch"
 
 echo "Prepared OBS sources in $dist"

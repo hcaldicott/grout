@@ -9,8 +9,8 @@ Meson package-cache downloads. It creates ignored artifacts under `dist/obs`.
 
 Upload these files to the unpublished `Grout:Staging:AlmaLinux9.8` project:
 
-- package `frr`: `dist/obs/frr.spec`, `dist/obs/frr-10.6.1.tar.gz`, and the
-  three renamed patches in `dist/obs`;
+- package `frr`: `dist/obs/frr.spec`, `dist/obs/frr-10.7.1.tar.gz`, and the
+  four renamed patches in `dist/obs`;
 - package `grout`: `dist/obs/grout.spec` and
   `dist/obs/grout-0.16.3.tar.gz`.
 

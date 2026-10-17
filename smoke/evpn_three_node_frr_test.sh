@@ -43,6 +43,15 @@ else
 	underlay_prefix=24
 fi
 
+if [ "$mh_enabled" = true ]; then
+	frr_version=$(zebra --version | sed -En 's/zebra version //p')
+	min_version=$(printf '%s\n%s\n' "$frr_version" "10.8.0" | sort -V | head -n1)
+	if ! [ "$min_version" = "10.8.0" ]; then
+		echo "$0: FRR $frr_version does not program EVPN-MH FDB nexthops via the dplane"
+		exit 125
+	fi
+fi
+
 fail() {
 	echo "FAIL: $*" >&2
 	return 1
@@ -278,11 +287,11 @@ log_after_line_has() {
 }
 
 evpn_mh_install_failure_logged() {
-	grep -q 'Failed to install EVPN-MH L2 nexthop ID (' "$tmp/${nodes[2]}.log"
+	grep -qE 'Failed to install EVPN-MH (L2 nexthop|NHG) [0-9]+' "$tmp/${nodes[2]}.log"
 }
 
 evpn_mh_delete_failure_logged() {
-	grep -q 'Failed to uninstall EVPN-MH L2 nexthop ID (' "$tmp/${nodes[2]}.log"
+	grep -q 'Failed to uninstall EVPN-MH FDB nexthop ID (' "$tmp/${nodes[2]}.log"
 }
 
 failure_probe_objects_intact() {
@@ -966,7 +975,7 @@ configure_mh_carrier() {
 			"fault injection: GR_NH_ADD object $fault_l2_id: Connection timed out"
 		wait_until "typed-L2 timeout result" log_after_line_has "$daemon_log" \
 			"$daemon_log_line" \
-			"Failed to install EVPN-MH L2 nexthop ID ($fault_l2_id)"
+			"Failed to install EVPN-MH L2 nexthop $fault_l2_id ("
 		for index in 1 2 3; do
 			wait_evpn_peers "${nodes[$((index - 1))]}"
 		done

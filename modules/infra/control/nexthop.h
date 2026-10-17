@@ -112,8 +112,9 @@ GR_NH_TYPE_INFO(GR_NH_T_L2, nexthop_info_l2, { BASE(gr_nexthop_info_l2); });
 
 static inline struct nexthop *
 nexthop_group_get_nh(struct nexthop_info_group *nhg, uint32_t flow_id) {
-	const struct nexthop_group_state *state =
-		atomic_load_explicit(&nhg->state, memory_order_acquire);
+	const struct nexthop_group_state *state = atomic_load_explicit(
+		&nhg->state, memory_order_acquire
+	);
 
 	if (unlikely(state == NULL || state->n_members == 0))
 		return NULL;

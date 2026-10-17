@@ -221,10 +221,8 @@ static struct api_out fdb_add(const void *request, struct api_ctx *) {
 
 	if (req->fdb.flags & ~(GR_FDB_F_STATIC | GR_FDB_F_EXTERN))
 		return api_out(EINVAL, 0, NULL);
-	if (req->fdb.nhg_id != GR_NH_ID_UNSET
-	    && (nhg = nexthop_lookup_id(req->fdb.nhg_id)) != NULL
-	    && (nhg->type != GR_NH_T_GROUP
-		|| nexthop_group_member_type(nhg) != GR_NH_T_L2))
+	if (req->fdb.nhg_id != GR_NH_ID_UNSET && (nhg = nexthop_lookup_id(req->fdb.nhg_id)) != NULL
+	    && (nhg->type != GR_NH_T_GROUP || nexthop_group_member_type(nhg) != GR_NH_T_L2))
 		return api_out(EPROTOTYPE, 0, NULL);
 
 	iface = iface_from_id(req->fdb.iface_id);

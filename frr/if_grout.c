@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (c) 2025 Maxime Leroy, Free Mobile
 
-#include <lib/zebra.h>
-
 #include "if_grout.h"
 #include "if_map.h"
 #include "l3vni_map.h"
@@ -16,6 +14,7 @@
 
 #include <lib/libfrr.h>
 #include <lib/version.h>
+#include <lib/zebra.h>
 #include <linux/if.h>
 #include <net/if.h>
 #include <zebra/interface.h>

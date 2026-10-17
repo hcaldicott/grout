@@ -12,10 +12,12 @@
 LOG_TYPE("nexthop");
 
 static bool group_equal(const struct nexthop *a, const struct nexthop *b) {
-	const struct nexthop_group_state *da =
-		atomic_load_explicit(&nexthop_info_group(a)->state, memory_order_acquire);
-	const struct nexthop_group_state *db =
-		atomic_load_explicit(&nexthop_info_group(b)->state, memory_order_acquire);
+	const struct nexthop_group_state *da = atomic_load_explicit(
+		&nexthop_info_group(a)->state, memory_order_acquire
+	);
+	const struct nexthop_group_state *db = atomic_load_explicit(
+		&nexthop_info_group(b)->state, memory_order_acquire
+	);
 
 	if (da == NULL || db == NULL)
 		return da == db;
@@ -106,8 +108,7 @@ static void group_remove_references(struct nexthop *nh) {
 
 static void group_free(struct nexthop *nh) {
 	struct nexthop_info_group *pvt = nexthop_info_group(nh);
-	struct nexthop_group_state *state =
-		atomic_load_explicit(&pvt->state, memory_order_relaxed);
+	struct nexthop_group_state *state = atomic_load_explicit(&pvt->state, memory_order_relaxed);
 
 	if (state == NULL)
 		return;
@@ -172,12 +173,10 @@ static int group_import_info(struct nexthop *nh, const void *info) {
 	} else if (group->n_members > 1) {
 		// Order by desc weight: if we have too many nh in the nhg, the ones with
 		// a higher weight will be included.
-		qsort(
-			next->members,
-			group->n_members,
-			sizeof(next->members[0]),
-			order_by_weight_desc
-		);
+		qsort(next->members,
+		      group->n_members,
+		      sizeof(next->members[0]),
+		      order_by_weight_desc);
 
 		max_weight = next->members[0].weight;
 		min_weight = next->members[group->n_members - 1].weight;
@@ -201,9 +200,7 @@ static int group_import_info(struct nexthop *nh, const void *info) {
 			goto cleanup;
 		}
 
-		group_reta_distribute(
-			group->n_members, next->reta_size, next->members, next->reta
-		);
+		group_reta_distribute(group->n_members, next->reta_size, next->members, next->reta);
 	}
 
 	if (nh->ref_count > 0)

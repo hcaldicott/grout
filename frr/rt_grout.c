@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (c) 2025 Maxime Leroy, Free Mobile
 
+// clang-format off
+// zebra.h must be the first FRR header: it pulls in config.h and the
+// feature macros the other FRR headers depend on.
 #include <lib/zebra.h>
+// clang-format on
 
 #include "if_map.h"
 #include "l3vni_map.h"
@@ -1213,7 +1217,8 @@ enum zebra_dplane_result grout_macfdb_update_ctx(struct zebra_dplane_ctx *ctx) {
 	);
 	if (vlan != GROUT_BRIDGE_VLAN) {
 		gr_log_err(
-			"rejecting MAC update for VLAN %u: Grout bridge domains only accept synthetic VLAN %u",
+			"rejecting MAC update for VLAN %u: Grout bridge domains only accept "
+			"synthetic VLAN %u",
 			vlan,
 			GROUT_BRIDGE_VLAN
 		);

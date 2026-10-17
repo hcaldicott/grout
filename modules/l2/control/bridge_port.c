@@ -4,8 +4,8 @@
 #include "config.h"
 #include "event.h"
 #include "iface.h"
-#include "log.h"
 #include "l2.h"
+#include "log.h"
 #include "module.h"
 #include "rcu.h"
 
@@ -50,8 +50,7 @@ static int bridge_port_policy_validate(const struct gr_bridge_port_policy *polic
 }
 
 static bool bridge_port_policy_empty(const struct gr_bridge_port_policy *policy) {
-	return policy->flags == 0 && policy->backup_nhg_id == 0
-		&& policy->n_sph_filters == 0;
+	return policy->flags == 0 && policy->backup_nhg_id == 0 && policy->n_sph_filters == 0;
 }
 
 static bool bridge_port_iface_ready(uint16_t iface_id) {

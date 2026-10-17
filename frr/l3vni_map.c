@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (c) 2026 Robin Jarry
 
+// clang-format off
+// zebra.h must be the first FRR header: it pulls in config.h and the
+// feature macros the other FRR headers depend on.
 #include <lib/zebra.h>
+// clang-format on
 
 #include "if_map.h"
 #include "l3vni_map.h"

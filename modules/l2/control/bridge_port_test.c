@@ -111,9 +111,7 @@ static void policy_waits_until_interface_is_bridge_ready(void **) {
 	test_iface.mode = GR_IFACE_MODE_BRIDGE;
 	bridge_port_policy_test_reconcile(test_iface.id);
 	assert_non_null(bridge_port_policy_get(test_iface.id));
-	assert_true(
-		bridge_port_policy_get(test_iface.id)->flags & GR_BRIDGE_PORT_F_NON_DF
-	);
+	assert_true(bridge_port_policy_get(test_iface.id)->flags & GR_BRIDGE_PORT_F_NON_DF);
 
 	bridge_port_policy_test_clear(test_iface.id);
 }

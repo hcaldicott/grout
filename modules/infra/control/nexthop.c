@@ -364,8 +364,7 @@ int nexthop_update(struct nexthop *nh, const struct gr_nexthop_base *base, const
 	// An in-place update with the same explicit ID must remain continuously
 	// visible to lock-free datapath lookups. Deleting and re-adding the key would
 	// create a real miss window even when the hash itself is concurrency-safe.
-	keep_id = nh->ref_count > 0 && nh->nh_id != GR_NH_ID_UNSET
-		&& nh->nh_id == base->nh_id;
+	keep_id = nh->ref_count > 0 && nh->nh_id != GR_NH_ID_UNSET && nh->nh_id == base->nh_id;
 	if (!keep_id)
 		nexthop_id_put(nh);
 

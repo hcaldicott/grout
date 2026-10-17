@@ -46,9 +46,5 @@ cp "$repo/subprojects/packagefiles/frr/10.7-zebra-route-IPv4-link-local-neighbor
 	"$dist/zebra-route-IPv4-link-local-neighbor-updates-through.patch"
 cp "$repo/subprojects/packagefiles/frr/10.7-bgpd-fix-crash-when-debug-bgp-updates-out-enabled.patch" \
 	"$dist/bgpd-fix-crash-when-debug-bgp-updates-out-enabled.patch"
-cp "$repo/subprojects/packagefiles/frr/10.7-zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch" \
-	"$dist/zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch"
-cp "$repo/subprojects/packagefiles/frr/10.7-zebra-reconcile-EVPN-MH-interface-MACs.patch" \
-	"$dist/zebra-reconcile-EVPN-MH-interface-MACs.patch"
 
 echo "Prepared OBS sources in $dist"

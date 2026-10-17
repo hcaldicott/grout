@@ -21,8 +21,6 @@ URL: http://www.frrouting.org
 Source0: %{name}-%{version}.tar.gz
 Patch0: zebra-route-IPv4-link-local-neighbor-updates-through.patch
 Patch1: bgpd-fix-crash-when-debug-bgp-updates-out-enabled.patch
-Patch2: zebra-route-EVPN-MH-L2-nexthops-through-dplane.patch
-Patch3: zebra-reconcile-EVPN-MH-interface-MACs.patch
 
 BuildRequires: autoconf
 BuildRequires: automake

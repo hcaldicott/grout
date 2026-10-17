@@ -209,6 +209,10 @@ struct worker *worker_find(unsigned cpu_id) {
 	return NULL;
 }
 
+static bool port_rxq_active(const struct iface_info_port *port, uint16_t queue_id) {
+	return !port->dynamic_queue_state || port->rxq_enabled[queue_id];
+}
+
 int port_unplug(struct iface_info_port *p) {
 	vec struct iface_info_port **ports = NULL;
 	struct iface *iface = NULL;
@@ -256,7 +260,7 @@ int port_plug(struct iface_info_port *p) {
 	STAILQ_FOREACH (worker, &workers, next) {
 		vec_foreach_ref (qmap, worker->rxqs) {
 			if (qmap->port_id == p->port_id) {
-				qmap->enabled = true;
+				qmap->enabled = port_rxq_active(p, qmap->queue_id);
 				changed++;
 			}
 		}
@@ -308,7 +312,7 @@ static void worker_txq_distribute(vec struct iface_info_port **ports) {
 			assert(port->n_txq > 0);
 			for (uint16_t i = 0; i < port->n_txq; i++) {
 				uint16_t candidate = (txq_idx + i) % port->n_txq;
-				if (!port->dynamic_txq_state || port->txq_enabled[candidate]) {
+				if (!port->dynamic_queue_state || port->txq_enabled[candidate]) {
 					queue_id = candidate;
 					txq_idx = candidate + 1;
 					break;
@@ -326,13 +330,27 @@ static void worker_txq_distribute(vec struct iface_info_port **ports) {
 	}
 }
 
-int worker_txq_refresh(void) {
+int worker_queue_refresh(void) {
 	vec struct iface_info_port **ports = NULL;
+	struct iface_info_port *port;
 	struct iface *iface = NULL;
+	struct queue_map *qmap;
+	struct worker *worker;
 	int ret;
 
 	while ((iface = iface_next(GR_IFACE_TYPE_PORT, iface)) != NULL)
 		vec_add(ports, iface_info_port(iface));
+
+	// follow the guest queue state on RX queues before distributing TX queues
+	STAILQ_FOREACH (worker, &workers, next) {
+		vec_foreach_ref (qmap, worker->rxqs) {
+			vec_foreach (port, ports) {
+				if (port->port_id != qmap->port_id || !port->dynamic_queue_state)
+					continue;
+				qmap->enabled = port->started && port->rxq_enabled[qmap->queue_id];
+			}
+		}
+	}
 
 	worker_txq_distribute(ports);
 	ret = worker_graph_reload_all(ports);
@@ -388,14 +406,17 @@ move:
 		.queue_id = rxq_id,
 		.enabled = true,
 	};
+	vec struct iface_info_port **ports = NULL;
+	struct iface *iface = NULL;
+	while ((iface = iface_next(GR_IFACE_TYPE_PORT, iface)) != NULL) {
+		struct iface_info_port *port = iface_info_port(iface);
+		if (port->port_id == port_id)
+			rx_qmap.enabled = port_rxq_active(port, rxq_id);
+		vec_add(ports, port);
+	}
 	vec_add(dst_worker->rxqs, rx_qmap);
 
 	// reassign TX queues and reload all graphs
-	vec struct iface_info_port **ports = NULL;
-	struct iface *iface = NULL;
-	while ((iface = iface_next(GR_IFACE_TYPE_PORT, iface)) != NULL)
-		vec_add(ports, iface_info_port(iface));
-
 	worker_txq_distribute(ports);
 
 	ret = worker_graph_reload_all(ports);
@@ -505,7 +526,7 @@ int worker_queue_distribute(const cpu_set_t *affinity, vec struct iface_info_por
 			struct queue_map q = {
 				.port_id = port->port_id,
 				.queue_id = rxq,
-				.enabled = port->started,
+				.enabled = port->started && port_rxq_active(port, rxq),
 			};
 			vec_add(worker->rxqs, q);
 

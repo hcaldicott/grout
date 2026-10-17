@@ -20,7 +20,7 @@ GR_IFACE_INFO(GR_IFACE_TYPE_PORT, iface_info_port, {
 	uint16_t port_id;
 	bool started;
 	bool needs_reset;
-	bool dynamic_txq_state;
+	bool dynamic_queue_state;
 	struct rte_mempool *pool;
 	char *devargs;
 	char *linux_ifname;
@@ -28,6 +28,7 @@ GR_IFACE_INFO(GR_IFACE_TYPE_PORT, iface_info_port, {
 	bool virtio_offloads;
 	bool soft_rss;
 	uint64_t rx_offloads;
+	bool rxq_enabled[RTE_MAX_QUEUES_PER_PORT];
 	bool txq_enabled[RTE_MAX_QUEUES_PER_PORT];
 	rte_spinlock_t txq_locks[RTE_MAX_QUEUES_PER_PORT];
 });

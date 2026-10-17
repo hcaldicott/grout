@@ -111,20 +111,18 @@ int port_configure(struct iface_info_port *p, uint16_t n_txq_min) {
 	if ((ret = rte_eth_dev_info_get(p->port_id, &info)) < 0)
 		return errno_log(-ret, "rte_eth_dev_info_get");
 
-	/*
-	 * virtio-user interfaces backed by /dev/vhost-net are used to attach
-	 * Linux host interfaces to Grout.  Requesting RX checksum offload makes
-	 * DPDK enable TUN_F_CSUM on the persistent TAP each time the port is
-	 * configured.  The Linux stack then emits CHECKSUM_PARTIAL packets while
-	 * Grout's overlay path has no device that completes that checksum.  This
-	 * is especially disruptive during graph reloads: existing TCP sessions
-	 * (for example DRBD replication) immediately stop while ICMP still works.
-	 *
-	 * Guest-facing net_vhost ports have the same requirement: QEMU can send
-	 * CHECKSUM_PARTIAL frames when the PMD advertises checksum capability,
-	 * but the bridge/VXLAN path has no device that completes the checksum.
-	 * Keep both virtual port types on their PMD software-checksum paths.
-	 */
+	// virtio-user interfaces backed by /dev/vhost-net are used to attach
+	// Linux host interfaces to Grout.  Requesting RX checksum offload makes
+	// DPDK enable TUN_F_CSUM on the persistent TAP each time the port is
+	// configured.  The Linux stack then emits CHECKSUM_PARTIAL packets while
+	// Grout's overlay path has no device that completes that checksum.  This
+	// is especially disruptive during graph reloads: existing TCP sessions
+	// (for example DRBD replication) immediately stop while ICMP still works.
+	//
+	// Guest-facing net_vhost ports have the same requirement: QEMU can send
+	// CHECKSUM_PARTIAL frames when the PMD advertises checksum capability,
+	// but the bridge/VXLAN path has no device that completes the checksum.
+	// Keep both virtual port types on their PMD software-checksum paths.
 	if (strcmp(info.driver_name, "net_virtio") == 0
 	    || strcmp(info.driver_name, "net_vhost") == 0)
 		conf.rxmode.offloads = 0;
